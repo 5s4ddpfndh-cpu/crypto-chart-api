@@ -79,6 +79,14 @@ class StrategyTests(unittest.TestCase):
                 self.assert_plan_consistent(result["short"])
                 self.assertIn(result["signal"], ("BUY", "SELL", "WAIT"))
 
+    def test_stop_stays_close_to_entry(self):
+        for seed in range(20):
+            for drift in (-0.002, 0.0, 0.002):
+                result = analyze(make_candles(300, drift=drift, seed=seed))
+                atr_value = result["indicators"]["atr"]
+                for plan in (result["long"], result["short"]):
+                    self.assertLessEqual(plan["riskPerUnit"], 1.51 * atr_value)
+
     def test_too_few_candles(self):
         with self.assertRaises(ValueError):
             analyze(make_candles(30))

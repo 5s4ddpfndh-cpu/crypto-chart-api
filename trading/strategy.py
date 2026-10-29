@@ -152,7 +152,7 @@ def _long_plan(price, atr_value, supports, resistances, ema20, ema50):
         low, high, source = min(ema20, ema50), max(ema20, ema50), "ema"
     else:
         low, high, source = price - atr_value, price - 0.3 * atr_value, "atr"
-    low, high = _min_width(low, high, atr_value)
+    low, high = _fit_width(low, high, atr_value, keep="high")
 
     stop = low - 0.5 * atr_value
     entry = price if low <= price <= high else (low + high) / 2
@@ -178,7 +178,7 @@ def _short_plan(price, atr_value, supports, resistances, ema20, ema50):
         low, high, source = min(ema20, ema50), max(ema20, ema50), "ema"
     else:
         low, high, source = price + 0.3 * atr_value, price + atr_value, "atr"
-    low, high = _min_width(low, high, atr_value)
+    low, high = _fit_width(low, high, atr_value, keep="low")
 
     stop = high + 0.5 * atr_value
     entry = price if low <= price <= high else (low + high) / 2
@@ -195,10 +195,17 @@ def _short_plan(price, atr_value, supports, resistances, ema20, ema50):
     return _plan("short", source, status, low, high, entry, stop, targets, risk)
 
 
-def _min_width(low, high, atr_value, width=0.3):
-    if high - low < width * atr_value:
+def _fit_width(low, high, atr_value, keep, min_width=0.3, max_width=1.0):
+    """Keep the entry zone between min and max width (in ATR). A zone that is
+    too wide is trimmed from the side away from price (`keep` is the edge
+    nearest price), so the stop does not end up far away."""
+    if high - low < min_width * atr_value:
         mid = (low + high) / 2
-        return mid - width * atr_value / 2, mid + width * atr_value / 2
+        return mid - min_width * atr_value / 2, mid + min_width * atr_value / 2
+    if high - low > max_width * atr_value:
+        if keep == "high":
+            return high - max_width * atr_value, high
+        return low, low + max_width * atr_value
     return low, high
 
 
