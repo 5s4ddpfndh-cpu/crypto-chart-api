@@ -232,7 +232,7 @@ def _plan(side, source, status, low, high, entry, stop, targets, risk):
         "entry": _r(entry),
         "stopLoss": _r(stop),
         "riskPerUnit": _r(risk),
-        "riskPct": _r(risk / entry * 100),
+        "riskPct": round(risk / entry * 100, 2),
         "targets": [
             {"price": _r(t), "rr": round(abs(t - entry) / risk, 2)} for t in targets
         ],
