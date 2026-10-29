@@ -90,7 +90,7 @@ async function load() {
   d.zones.support.slice(0, 3).forEach(z => line(z.mid, 'rgba(38,166,154,.45)', 'دعم', 2));
   d.zones.resistance.slice(0, 3).forEach(z => line(z.mid, 'rgba(239,83,80,.45)', 'مقاومة', 2));
 
-  const shown = d.plan || (d.bias === 'bearish' ? d.short : d.long);
+  const shown = d.plan || (d.score < 0 ? d.short : d.long);
   line(shown.entryZone.high, '#58a6ff', 'دخول', 1);
   line(shown.entryZone.low, '#58a6ff', 'دخول', 1);
   line(shown.stopLoss, '#ef5350', 'وقف');
