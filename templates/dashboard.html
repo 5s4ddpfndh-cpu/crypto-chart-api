@@ -40,10 +40,11 @@
   <input id="balance" type="number" placeholder="رأس المال $" style="width:120px">
   <input id="risk" type="number" value="1" step="0.25" style="width:70px" title="المخاطرة %">
   <button onclick="load()">تحليل</button>
+  <button onclick="runBacktest()" style="background:#1f6feb;border-color:#1f6feb">اختبار تاريخي</button>
 </header>
 <main>
   <div id="chart"></div>
-  <aside id="side"><div class="card muted">جارِ التحميل…</div></aside>
+  <aside><div id="bt"></div><div id="side"><div class="card muted">جارِ التحميل…</div></div></aside>
 </main>
 <script>
 const chart = LightweightCharts.createChart(document.getElementById('chart'), {
@@ -104,6 +105,30 @@ async function load() {
     <div class="card"><h3>أسباب الإشارة</h3><ul>${d.reasons.map(r => `<li class="${r.points > 0 ? 'pos' : 'neg'}">${r.points > 0 ? '+' : ''}${r.points} ${r.text}</li>`).join('')}</ul></div>
     <div class="card"><h3>قواعد الخروج</h3><ul>${d.exitRules.map(r => `<li>${r}</li>`).join('')}</ul></div>
     <p class="muted">⚠️ أداة تحليل فقط وليست نصيحة مالية.</p>`;
+}
+async function runBacktest() {
+  const bt = document.getElementById('bt');
+  bt.innerHTML = '<div class="card muted">جارِ الاختبار على آخر 1000 شمعة… قد يستغرق دقيقة</div>';
+  const q = new URLSearchParams({ symbol: symbol.value.trim().toUpperCase(), interval: interval.value, limit: 1000 });
+  const d = await (await fetch('/backtest?' + q)).json();
+  if (d.error) { bt.innerHTML = `<div class="card neg">${d.error}</div>`; return; }
+  const s = d.stats;
+  if (!s.trades) { bt.innerHTML = '<div class="card muted">لا توجد صفقات مغلقة كافية في هذه الفترة</div>'; return; }
+  const pf = s.profitFactor === null ? '∞' : s.profitFactor;
+  let verdict, cls;
+  if (s.trades < 20) { verdict = 'عدد الصفقات قليل، النتيجة غير موثوقة بعد'; cls = 'WAIT'; }
+  else if (s.profitFactor === null || s.profitFactor >= 1.3) { verdict = 'الاستراتيجية مربحة تاريخياً على هذا الفريم'; cls = 'BUY'; }
+  else if (s.profitFactor >= 1) { verdict = 'ربح ضعيف، استخدمها بحذر'; cls = 'WAIT'; }
+  else { verdict = 'خاسرة تاريخياً على هذا الفريم، لا تستخدمها هنا'; cls = 'SELL'; }
+  bt.innerHTML = `<div class="card"><h3>نتيجة الاختبار التاريخي (${d.symbol} · ${d.interval})</h3>
+    <table>
+      <tr><td>عدد الصفقات</td><td>${s.trades}</td></tr>
+      <tr><td>نسبة الربح</td><td>${s.winRate}%</td></tr>
+      <tr><td>Profit Factor</td><td class="${pf === '∞' || pf >= 1 ? 'pos' : 'neg'}">${pf}</td></tr>
+      <tr><td>مجموع الربح</td><td class="${s.totalR >= 0 ? 'pos' : 'neg'}">${s.totalR}R</td></tr>
+      <tr><td>أسوأ تراجع</td><td class="neg">${s.maxDrawdownR}R</td></tr>
+    </table>
+    <div class="signal ${cls}" style="font-size:15px;margin-top:10px">${verdict}</div></div>`;
 }
 load();
 </script>
