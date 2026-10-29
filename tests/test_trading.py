@@ -3,7 +3,8 @@ import random
 import unittest
 from unittest import mock
 
-from trading import analyze, backtest
+from trading import analyze, backtest, compare, fetch_candles
+from trading.strategies import STRATEGIES, build_context, live_signal
 from trading.indicators import atr, ema, rsi
 
 
@@ -94,10 +95,64 @@ class StrategyTests(unittest.TestCase):
 
 class BacktestTests(unittest.TestCase):
     def test_backtest_runs(self):
-        result = backtest(make_candles(600, drift=0.001))
+        result = backtest(make_candles(600, drift=0.001), fee_pct=0)
         self.assertIn("stats", result)
         for t in result["trades"]:
             self.assertGreaterEqual(t["resultR"], -1.0001)
+
+    def test_fees_reduce_results(self):
+        candles = make_candles(800, drift=0.001)
+        free = backtest(candles, "macd_trend", fee_pct=0)["stats"]
+        paid = backtest(candles, "macd_trend", fee_pct=0.1)["stats"]
+        self.assertGreater(free["trades"], 0)
+        self.assertLess(paid["totalR"], free["totalR"])
+
+    def test_every_strategy_produces_valid_trades(self):
+        candles = make_candles(1500, drift=0.0005, seed=3)
+        for key in STRATEGIES:
+            result = backtest(candles, key, fee_pct=0)
+            for t in result["trades"]:
+                direction = 1 if t["side"] == "long" else -1
+                self.assertGreater((t["entry"] - t["stopLoss"]) * direction, 0, key)
+                self.assertGreater((t["targets"][0] - t["entry"]) * direction, 0, key)
+                self.assertGreaterEqual(t["resultR"], -1.0001, key)
+
+    def test_strategies_do_not_look_ahead(self):
+        candles = make_candles(700, seed=5)
+        full, cut = build_context(candles), build_context(candles[:500])
+        for key, meta in STRATEGIES.items():
+            if key == "confluence":
+                continue
+            for i in range(250, 500):
+                self.assertEqual(meta["fn"](full, i), meta["fn"](cut, i), (key, i))
+
+    def test_compare_ranks_all_strategies(self):
+        results = compare(make_candles(800, drift=0.001))
+        self.assertEqual({r["strategy"] for r in results}, set(STRATEGIES))
+
+    def test_live_signal_is_plan_or_none(self):
+        candles = make_candles(400, drift=0.003)
+        for key in STRATEGIES:
+            plan = live_signal(candles, key)
+            self.assertTrue(plan is None or plan["side"] in ("long", "short"))
+
+
+class DataTests(unittest.TestCase):
+    def test_fetch_pages_backwards(self):
+        def fake_get(url, params, timeout):
+            end = params.get("endTime", 10_000)
+            rows = [[t, "1", "2", "0.5", "1.5", "10", t + 1] for t in range(end - params["limit"] + 1, end + 1)]
+            response = mock.Mock()
+            response.json.return_value = rows
+            return response
+
+        with mock.patch("trading.data.requests.get", side_effect=fake_get) as get:
+            candles = fetch_candles("BTCUSDT", "15m", 2500)
+        self.assertEqual(len(candles), 2500)
+        self.assertEqual(get.call_count, 3)
+        times = [c["openTime"] for c in candles]
+        self.assertEqual(times, sorted(times))
+        self.assertEqual(len(set(times)), 2500)
 
 
 class ApiTests(unittest.TestCase):
@@ -119,6 +174,18 @@ class ApiTests(unittest.TestCase):
         data = self.client.get("/mtf").get_json()
         self.assertTrue(data["aligned"])
         self.assertEqual(data["bias"], "bullish")
+
+    def test_analyze_with_strategy(self):
+        data = self.client.get("/analyze?strategy=ema_pullback").get_json()
+        self.assertEqual(data["strategy"], "ema_pullback")
+        self.assertIn(data["signal"], ("BUY", "SELL", "WAIT"))
+
+    def test_unknown_strategy(self):
+        self.assertEqual(self.client.get("/backtest?strategy=nope").status_code, 500)
+
+    def test_compare(self):
+        data = self.client.get("/compare").get_json()
+        self.assertEqual(len(data["results"]), len(STRATEGIES))
 
     def test_dashboard(self):
         self.assertEqual(self.client.get("/dashboard").status_code, 200)

@@ -1,8 +1,10 @@
 from flask import Flask, jsonify, render_template, request
 import requests
 
-from trading import analyze, backtest, fetch_candles
+from trading import analyze, backtest, compare, fetch_candles
 from trading.data import BINANCE_BASE
+from trading.strategies import STRATEGIES, live_signal
+from trading.strategy import _add_sizing
 
 app = Flask(__name__)
 
@@ -51,6 +53,13 @@ def klines():
         return jsonify({"error": str(e)}), 500
 
 
+def _strategy_arg():
+    strategy = request.args.get("strategy", "confluence")
+    if strategy not in STRATEGIES:
+        raise ValueError(f"unknown strategy '{strategy}', choose one of {list(STRATEGIES)}")
+    return strategy
+
+
 def _float_arg(name, default=None):
     value = request.args.get(name)
     return float(value) if value not in (None, "") else default
@@ -62,12 +71,20 @@ def analyze_route():
     interval = request.args.get("interval", "1h")
     try:
         candles = fetch_candles(symbol, interval, request.args.get("limit", 500))
-        result = analyze(
-            candles,
-            balance=_float_arg("balance"),
-            risk_pct=_float_arg("risk", 1.0),
-            min_rr=_float_arg("minRR", 1.5),
-        )
+        strategy = _strategy_arg()
+        balance, risk_pct = _float_arg("balance"), _float_arg("risk", 1.0)
+        result = analyze(candles, balance=balance, risk_pct=risk_pct,
+                         min_rr=_float_arg("minRR", 1.5))
+        if strategy != "confluence":
+            # Zones, score and reasons still come from the main analysis as
+            # context; the signal and plan come from the chosen strategy.
+            plan = live_signal(candles, strategy)
+            if plan:
+                _add_sizing(plan, balance, risk_pct)
+            result["plan"] = plan
+            result["signal"] = {"long": "BUY", "short": "SELL"}[plan["side"]] if plan else "WAIT"
+        result["strategy"] = strategy
+        result["strategyName"] = STRATEGIES[strategy]["name"]
         if request.args.get("candles") == "1":
             result["candles"] = candles
         return jsonify({"symbol": symbol, "interval": interval, **result})
@@ -112,8 +129,29 @@ def backtest_route():
     interval = request.args.get("interval", "1h")
     try:
         candles = fetch_candles(symbol, interval, request.args.get("limit", 1000))
-        result = backtest(candles, min_rr=_float_arg("minRR", 1.5))
-        return jsonify({"symbol": symbol, "interval": interval, **result})
+        result = backtest(candles, _strategy_arg(), min_rr=_float_arg("minRR", 1.5),
+                          fee_pct=_float_arg("fee", 0.1))
+        return jsonify({"symbol": symbol, "interval": interval, "candleCount": len(candles), **result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/compare")
+def compare_route():
+    """Backtest every strategy on the same candles and rank them."""
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    interval = request.args.get("interval", "15m")
+    try:
+        candles = fetch_candles(symbol, interval, request.args.get("limit", 5000))
+        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=_float_arg("fee", 0.1))
+        return jsonify({
+            "symbol": symbol,
+            "interval": interval,
+            "candleCount": len(candles),
+            "from": candles[0]["openTime"],
+            "to": candles[-1]["openTime"],
+            "results": results,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
