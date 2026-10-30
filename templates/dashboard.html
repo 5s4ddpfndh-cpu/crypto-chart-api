@@ -6,55 +6,104 @@
 <title>نظام التداول</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
-  :root { --bg:#0e1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --buy:#26a69a; --sell:#ef5350; --warn:#f0b429; --line:#30363d; }
+  :root { --bg:#0e1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --buy:#26a69a; --sell:#ef5350; --warn:#f0b429; --line:#30363d; --accent:#8957e5; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui, "Segoe UI", Tahoma, sans-serif; }
-  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:18px; margin:0 0 0 auto; }
-  input, select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:14px; }
+  header { padding:12px 16px 0; }
+  header h1 { font-size:18px; margin:0 0 10px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  input, select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:15px; }
+  select { flex:1; min-width:100px; }
   button { background:#238636; border-color:#238636; cursor:pointer; }
-  main { display:grid; grid-template-columns:1fr 360px; gap:12px; padding:12px 16px; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; } }
-  #chart { height:560px; background:var(--panel); border-radius:8px; }
+  button.secondary { background:var(--accent); border-color:var(--accent); }
+  .tabs { display:flex; border-bottom:1px solid var(--line); margin:4px 16px 0; }
+  .tab { flex:1; text-align:center; padding:10px; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent; }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  main { padding:12px 16px; }
+  #signalView { display:grid; grid-template-columns:1fr 360px; gap:12px; }
+  @media (max-width:900px) { #signalView { grid-template-columns:1fr; } }
+  #chart { height:420px; background:var(--panel); border-radius:8px; }
   .card { background:var(--panel); border-radius:8px; padding:12px; margin-bottom:12px; }
   .signal { font-size:28px; font-weight:700; text-align:center; padding:8px; border-radius:6px; }
   .BUY { background:rgba(38,166,154,.2); color:var(--buy); }
   .SELL { background:rgba(239,83,80,.2); color:var(--sell); }
   .WAIT { background:rgba(240,180,41,.15); color:var(--warn); }
   table { width:100%; border-collapse:collapse; font-size:14px; }
-  td { padding:5px 2px; border-bottom:1px solid var(--line); }
-  td:last-child { text-align:left; direction:ltr; font-variant-numeric:tabular-nums; }
+  td, th { padding:6px 3px; border-bottom:1px solid var(--line); }
+  .num { text-align:left; direction:ltr; font-variant-numeric:tabular-nums; }
   .muted { color:var(--muted); font-size:13px; }
-  .pos { color:var(--buy); } .neg { color:var(--sell); }
+  .pos { color:var(--buy); } .neg { color:var(--sell); } .warn { color:var(--warn); }
   ul { padding-right:18px; margin:6px 0; font-size:13px; }
   h3 { margin:4px 0 8px; font-size:15px; }
+  details summary { cursor:pointer; color:var(--muted); font-size:14px; margin-bottom:8px; }
+  .matrix { overflow-x:auto; }
+  .matrix table { font-size:11px; table-layout:fixed; }
+  .matrix th:first-child { width:30%; }
+  .matrix td:first-child { font-size:12px; }
+  .matrix th { color:var(--muted); font-weight:500; }
+  .cell { text-align:center; border-radius:4px; padding:4px 1px; white-space:nowrap; }
+  .cell.strong { background:rgba(38,166,154,.25); }
+  .cell.weak { background:rgba(240,180,41,.15); }
+  .cell.losing { background:rgba(239,83,80,.12); }
+  .cell.best { outline:2px solid var(--buy); }
+  .cell b { display:block; font-size:13px; direction:ltr; }
+  .hidden { display:none !important; }
 </style>
 </head>
 <body>
 <header>
   <h1>📈 نظام التداول الاحترافي</h1>
-  <input id="symbol" value="BTCUSDT" size="10">
-  <select id="interval">
-    <option selected>15m</option><option>1h</option><option>4h</option><option>1d</option>
-  </select>
-  <select id="strategy">
-    <option value="confluence">الدعم والمقاومة (الأصلية)</option>
-    <option value="ema_pullback">الارتداد من EMA20</option>
-    <option value="breakout">الاختراق مع الحجم</option>
-    <option value="rsi_reversion">ارتداد RSI مع الترند</option>
-    <option value="macd_trend">تقاطع MACD مع الترند</option>
-  </select>
-  <input id="balance" type="number" placeholder="رأس المال $" style="width:120px">
-  <input id="risk" type="number" value="1" step="0.25" style="width:70px" title="المخاطرة %">
-  <button onclick="load()">تحليل</button>
-  <button onclick="runBacktest()" style="background:#1f6feb;border-color:#1f6feb">اختبار تاريخي</button>
-  <button onclick="runCompare()" style="background:#8957e5;border-color:#8957e5">مقارنة الاستراتيجيات</button>
+  <div class="row">
+    <select id="market"></select>
+    <select id="interval"></select>
+  </div>
+  <div class="row">
+    <select id="strategy"></select>
+    <button onclick="load()">تحليل</button>
+  </div>
+  <details>
+    <summary>⚙️ إدارة المخاطرة وسعر منصتك</summary>
+    <div class="row">
+      <input id="balance" type="number" placeholder="رأس المال $" style="width:130px">
+      <input id="risk" type="number" value="1" step="0.25" style="width:80px" title="المخاطرة %">
+      <span class="muted">% مخاطرة لكل صفقة</span>
+    </div>
+    <div class="row">
+      <input id="broker" type="number" step="any" placeholder="سعر منصتك الحالي (اختياري)" style="flex:1">
+    </div>
+    <p class="muted">إذا أدخلت سعر منصتك الحالي، تُعدَّل كل المستويات بفرق السعر بين مصدر البيانات ومنصتك.</p>
+  </details>
 </header>
+<div class="tabs">
+  <div class="tab active" id="tabSignal" onclick="showTab('signal')">الإشارة</div>
+  <div class="tab" id="tabResearch" onclick="showTab('research')">أفضل استراتيجية</div>
+</div>
 <main>
-  <div id="chart"></div>
-  <aside><div id="bt"></div><div id="side"><div class="card muted">جارِ التحميل…</div></div></aside>
+  <div id="signalView">
+    <div id="chart"></div>
+    <aside id="side"><div class="card muted">جارِ التحميل…</div></aside>
+  </div>
+  <div id="researchView" class="hidden">
+    <div class="card">
+      <h3>البحث عن أفضل استراتيجية</h3>
+      <p class="muted">يختبر كل الاستراتيجيات على كل الفريمات للسوق المختار، على أطول بيانات تاريخية متاحة، بعد خصم العمولة والسبريد.</p>
+      <button class="secondary" onclick="research()" style="width:100%">ابدأ البحث</button>
+    </div>
+    <div id="researchOut"></div>
+    <div class="card">
+      <h3>كيف تقرأ النتائج</h3>
+      <ul>
+        <li><b>متوسط الصفقة (R)</b>: أهم رقم. 0.2R يعني أنك تربح في المتوسط 20% مما تخاطر به في كل صفقة.</li>
+        <li><b>نسبة النجاح</b> وحدها مضللة: استراتيجية تربح 80% من الصفقات قد تخسر إذا كانت خسائرها أكبر من أرباحها.</li>
+        <li><span class="pos">أخضر = قوية</span>: 30 صفقة على الأقل، رابحة في النصف الأول والثاني من الفترة، وProfit Factor ≥ 1.3.</li>
+        <li><span class="warn">أصفر = ضعيفة</span>: رابحة لكن غير ثابتة أو هامشها صغير.</li>
+        <li><span class="neg">أحمر = خاسرة</span>. الرمادي = صفقات قليلة جداً للحكم.</li>
+      </ul>
+    </div>
+  </div>
 </main>
 <script>
+let META = null;
 const chart = LightweightCharts.createChart(document.getElementById('chart'), {
   layout: { background: { color: '#161b22' }, textColor: '#e6edf3' },
   grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
@@ -66,34 +115,52 @@ new ResizeObserver(() => chart.applyOptions({ width: document.getElementById('ch
 
 const STATUS = { in_zone: 'السعر داخل منطقة الدخول — ادخل الآن', waiting: 'ضع أمر حد (Limit) وانتظر وصول السعر', invalidated: 'الإعداد ملغى' };
 const SOURCE = { support: 'منطقة دعم', resistance: 'منطقة مقاومة', ema: 'متوسطات EMA20/50', atr: 'مسافة ATR', market: 'دخول بسعر السوق' };
-try { const saved = localStorage.getItem('strategy'); if (saved) strategy.value = saved; } catch (e) {}
-strategy.onchange = () => { try { localStorage.setItem('strategy', strategy.value); } catch (e) {} load(); };
+const VERDICT = { strong: '✅ قوية', weak: '⚠️ ضعيفة', losing: '❌ خاسرة', few_trades: '— صفقات قليلة' };
+
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+
+function showTab(name) {
+  document.getElementById('signalView').classList.toggle('hidden', name !== 'signal');
+  document.getElementById('researchView').classList.toggle('hidden', name !== 'research');
+  document.getElementById('tabSignal').classList.toggle('active', name === 'signal');
+  document.getElementById('tabResearch').classList.toggle('active', name === 'research');
+  if (name === 'research') renderResearch(store.get('research:' + market.value));
+  else chart.applyOptions({ width: document.getElementById('chart').clientWidth });
+}
 
 function line(price, color, title, style = 0) {
   priceLines.push(series.createPriceLine({ price, color, title, lineWidth: 2, lineStyle: style, axisLabelVisible: true }));
 }
 
-function planTable(p) {
-  if (!p) return '';
+function fmt(v) {
+  return Math.abs(v) >= 1000 ? v.toFixed(2) : Math.abs(v) >= 1 ? v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : v.toPrecision(6);
+}
+
+function planTable(p, offset) {
+  const adj = v => fmt(v + offset);
   const side = p.side === 'long' ? '<span class="pos">شراء (Long)</span>' : '<span class="neg">بيع (Short)</span>';
-  let rows = `<tr><td>الاتجاه</td><td>${side}</td></tr>
-    <tr><td>منطقة الدخول</td><td>${p.entryZone.low} – ${p.entryZone.high}</td></tr>
-    <tr><td>سعر الدخول</td><td>${p.entry}</td></tr>
-    <tr><td>وقف الخسارة</td><td class="neg">${p.stopLoss} (${p.riskPct}%)</td></tr>`;
-  p.targets.forEach((t, i) => rows += `<tr><td>الهدف ${i + 1}</td><td class="pos">${t.price} (${t.rr}R)</td></tr>`);
-  if (p.position) rows += `<tr><td>الكمية</td><td>${p.position.quantity}</td></tr>
-    <tr><td>قيمة الصفقة</td><td>$${p.position.notional} (x${p.position.leverageNeeded})</td></tr>
-    <tr><td>المخاطرة</td><td>$${p.position.riskAmount}</td></tr>`;
-  return `<table>${rows}</table><p class="muted">${SOURCE[p.source]} · ${STATUS[p.status]}</p>`;
+  const zone = p.entryZone.low === p.entryZone.high ? adj(p.entryZone.low) : `${adj(p.entryZone.low)} – ${adj(p.entryZone.high)}`;
+  let rows = `<tr><td>الاتجاه</td><td class="num">${side}</td></tr>
+    <tr><td>منطقة الدخول</td><td class="num">${zone}</td></tr>
+    <tr><td>وقف الخسارة</td><td class="num neg">${adj(p.stopLoss)} (${p.riskPct}%)</td></tr>`;
+  p.targets.forEach((t, i) => rows += `<tr><td>الهدف ${i + 1}</td><td class="num pos">${adj(t.price)} (${t.rr}R)</td></tr>`);
+  if (p.position) rows += `<tr><td>الكمية</td><td class="num">${p.position.quantity}</td></tr>
+    <tr><td>قيمة الصفقة</td><td class="num">$${p.position.notional} (x${p.position.leverageNeeded})</td></tr>
+    <tr><td>المخاطرة</td><td class="num">$${p.position.riskAmount}</td></tr>`;
+  const offsetNote = offset ? `<p class="muted">الأسعار معدّلة لمنصتك (فرق ${offset > 0 ? '+' : ''}${fmt(offset)})</p>` : '';
+  return `<table>${rows}</table>${offsetNote}<p class="muted">${SOURCE[p.source]} · ${STATUS[p.status]}</p>`;
 }
 
 async function load() {
-  const q = new URLSearchParams({ symbol: symbol.value.trim().toUpperCase(), interval: interval.value, candles: 1, risk: risk.value, strategy: strategy.value });
+  const q = new URLSearchParams({ market: market.value, interval: interval.value, candles: 1, risk: risk.value, strategy: strategy.value });
   if (balance.value) q.set('balance', balance.value);
   const side = document.getElementById('side');
   side.innerHTML = '<div class="card muted">جارِ التحليل…</div>';
-  const res = await fetch('/analyze?' + q);
-  const d = await res.json();
+  let d;
+  try { d = await (await fetch('/analyze?' + q)).json(); } catch (e) { d = { error: 'تعذر الاتصال بالخادم، حاول مرة أخرى' }; }
   if (d.error) { side.innerHTML = `<div class="card neg">${d.error}</div>`; return; }
 
   series.setData(d.candles.map(c => ({ time: c.openTime / 1000, open: c.open, high: c.high, low: c.low, close: c.close })));
@@ -109,83 +176,130 @@ async function load() {
     line(shown.stopLoss, '#ef5350', 'وقف');
     shown.targets.forEach((t, i) => line(t.price, '#26a69a', 'TP' + (i + 1)));
   }
+  const offset = broker.value ? parseFloat(broker.value) - d.price : 0;
   const planCard = shown
-    ? `<h3>${d.plan ? 'خطة الصفقة' : 'السيناريو المحتمل (لا تدخل بعد)'}</h3>${planTable(shown)}${shown.barsAgo ? `<p class="muted">ظهرت الإشارة قبل ${shown.barsAgo} شمعة</p>` : ''}`
+    ? `<h3>${d.plan ? 'خطة الصفقة' : 'السيناريو المحتمل (لا تدخل بعد)'}</h3>${planTable(shown, offset)}${shown.barsAgo ? `<p class="muted">ظهرت الإشارة قبل ${shown.barsAgo} شمعة</p>` : ''}`
     : `<h3>لا توجد إشارة الآن</h3><p class="muted">استراتيجية "${d.strategyName}" لا تعطي صفقة حالياً. انتظر وأعد التحليل بعد إغلاق الشمعة التالية.</p>`;
+  const best = store.get('best:' + market.value);
+  const bestNote = best && (best.strategy !== strategy.value || best.interval !== interval.value)
+    ? `<p class="warn" style="font-size:13px">أفضل تركيبة من آخر بحث: ${META.strategies[best.strategy].name} على ${best.interval} — <a href="#" onclick="applyBest();return false" style="color:var(--warn)">استخدمها</a></p>` : '';
 
   const label = { BUY: 'شراء ▲', SELL: 'بيع ▼', WAIT: 'انتظار ⏸' }[d.signal];
   side.innerHTML = `
     <div class="card"><div class="signal ${d.signal}">${label}</div>
-      <p class="muted" style="text-align:center">السعر ${d.price} · القوة ${d.score} / 100 · ATR ${d.indicators.atr}</p></div>
-    <div class="card"><p class="muted" style="margin:0 0 6px">الاستراتيجية: ${d.strategyName}</p>${planCard}</div>
-    <div class="card"><h3>أسباب الإشارة</h3><ul>${d.reasons.map(r => `<li class="${r.points > 0 ? 'pos' : 'neg'}">${r.points > 0 ? '+' : ''}${r.points} ${r.text}</li>`).join('')}</ul></div>
+      <p class="muted" style="text-align:center">${d.name} · السعر ${fmt(d.price)} · القوة ${d.score} / 100</p>${bestNote}</div>
+    <div class="card"><p class="muted" style="margin:0 0 6px">الاستراتيجية: ${d.strategyName} · ${d.interval}</p>${planCard}</div>
+    <div class="card"><h3>أسباب الاتجاه</h3><ul>${d.reasons.map(r => `<li class="${r.points > 0 ? 'pos' : 'neg'}">${r.points > 0 ? '+' : ''}${r.points} ${r.text}</li>`).join('')}</ul></div>
     <div class="card"><h3>قواعد الخروج</h3><ul>${d.exitRules.map(r => `<li>${r}</li>`).join('')}</ul></div>
+    <p class="muted">ℹ️ ${d.note}</p>
     <p class="muted">⚠️ أداة تحليل فقط وليست نصيحة مالية.</p>`;
 }
-async function runBacktest() {
-  const bt = document.getElementById('bt');
-  bt.innerHTML = '<div class="card muted">جارِ الاختبار على آخر 5000 شمعة… قد يستغرق دقيقة</div>';
-  const q = new URLSearchParams({ symbol: symbol.value.trim().toUpperCase(), interval: interval.value, limit: 5000, strategy: strategy.value });
-  const d = await (await fetch('/backtest?' + q)).json();
-  if (d.error) { bt.innerHTML = `<div class="card neg">${d.error}</div>`; return; }
-  const s = d.stats;
-  if (!s.trades) { bt.innerHTML = '<div class="card muted">لا توجد صفقات مغلقة كافية في هذه الفترة</div>'; return; }
-  const pf = s.profitFactor === null ? '∞' : s.profitFactor;
-  let verdict, cls;
-  if (s.trades < 20) { verdict = 'عدد الصفقات قليل، النتيجة غير موثوقة بعد'; cls = 'WAIT'; }
-  else if (s.profitFactor === null || s.profitFactor >= 1.3) { verdict = 'الاستراتيجية مربحة تاريخياً على هذا الفريم'; cls = 'BUY'; }
-  else if (s.profitFactor >= 1) { verdict = 'ربح ضعيف، استخدمها بحذر'; cls = 'WAIT'; }
-  else { verdict = 'خاسرة تاريخياً على هذا الفريم، لا تستخدمها هنا'; cls = 'SELL'; }
-  bt.innerHTML = `<div class="card"><h3>نتيجة الاختبار التاريخي (${d.symbol} · ${d.interval})</h3>
-    <p class="muted">${strategy.options[strategy.selectedIndex].text} · ${period(d.candleCount, d.interval)} · بعد خصم العمولة 0.1%</p>
-    <table>
-      <tr><td>عدد الصفقات</td><td>${s.trades}</td></tr>
-      <tr><td>نسبة الربح</td><td>${s.winRate}%</td></tr>
-      <tr><td>Profit Factor</td><td class="${pf === '∞' || pf >= 1 ? 'pos' : 'neg'}">${pf}</td></tr>
-      <tr><td>مجموع الربح</td><td class="${s.totalR >= 0 ? 'pos' : 'neg'}">${s.totalR}R</td></tr>
-      <tr><td>أسوأ تراجع</td><td class="neg">${s.maxDrawdownR}R</td></tr>
-      ${s.firstHalfR !== undefined ? `<tr><td>النصف الأول / الثاني</td><td>${s.firstHalfR}R / ${s.secondHalfR}R</td></tr>` : ''}
-    </table>
-    <div class="signal ${cls}" style="font-size:15px;margin-top:10px">${verdict}</div></div>`;
-}
-function period(count, iv) {
-  const minutes = { '15m': 15, '1h': 60, '4h': 240, '1d': 1440 }[iv] || 60;
-  return `${count} شمعة (~${Math.round(count * minutes / 1440)} يوم)`;
+
+function days(count, iv) {
+  const minutes = { '15m': 15, '1h': 60, '4h': 240, '1d': 1440 }[iv];
+  return Math.round(count * minutes / 1440);
 }
 
-async function runCompare() {
-  const bt = document.getElementById('bt');
-  bt.innerHTML = '<div class="card muted">جارِ مقارنة 5 استراتيجيات على آخر 5000 شمعة… قد يستغرق حتى دقيقتين</div>';
-  const q = new URLSearchParams({ symbol: symbol.value.trim().toUpperCase(), interval: interval.value, limit: 5000 });
-  let d;
-  try { d = await (await fetch('/compare?' + q)).json(); } catch (e) { d = { error: 'انتهت المهلة، حاول مرة أخرى' }; }
-  if (d.error) { bt.innerHTML = `<div class="card neg">${d.error}</div>`; return; }
-  const rows = d.results.map((r, i) => {
-    const s = r.stats;
-    if (!s.trades) return `<tr><td>${r.name}</td><td class="muted">لا صفقات</td></tr>`;
-    const ok = s.trades >= 20 && s.totalR > 0 && (s.profitFactor === null || s.profitFactor >= 1.3) && s.consistent;
-    const mark = ok ? '✅' : s.totalR > 0 ? '⚠️' : '❌';
-    return `<tr onclick="pick('${r.strategy}')" style="cursor:pointer">
-      <td>${mark} ${r.name}<div class="muted">${s.trades} صفقة · ربح ${s.winRate}% · PF ${s.profitFactor ?? '∞'}${s.consistent === undefined ? '' : s.consistent ? ' · ثابتة' : ' · غير ثابتة'}</div></td>
-      <td class="${s.totalR >= 0 ? 'pos' : 'neg'}">${s.totalR}R</td></tr>`;
-  }).join('');
-  const best = d.results.find(r => r.stats.trades >= 20 && r.stats.totalR > 0 && r.stats.consistent);
-  bt.innerHTML = `<div class="card"><h3>مقارنة الاستراتيجيات (${d.symbol} · ${d.interval})</h3>
-    <p class="muted">${period(d.candleCount, d.interval)} · بعد خصم العمولة 0.1% · اضغط على استراتيجية لاختيارها</p>
-    <table>${rows}</table>
-    <div class="signal ${best ? 'BUY' : 'SELL'}" style="font-size:15px;margin-top:10px">${best
-      ? `الأفضل: ${best.name}`
-      : 'لا توجد استراتيجية مربحة وثابتة على هذا الفريم'}</div>
-    <p class="muted">✅ مربحة وثابتة في النصفين · ⚠️ ربح غير مؤكد · ❌ خاسرة</p></div>`;
+async function research() {
+  const mk = market.value;
+  const out = document.getElementById('researchOut');
+  const result = { market: mk, date: new Date().toISOString(), frames: {} };
+  for (const iv of META.timeframes) {
+    out.innerHTML = `<div class="card muted">جارِ اختبار ${META.markets[mk].name} على فريم ${iv}… (${Object.keys(result.frames).length + 1}/${META.timeframes.length}) قد يستغرق دقيقة لكل فريم</div>`;
+    try {
+      const d = await (await fetch('/compare?' + new URLSearchParams({ market: mk, interval: iv, limit: 6000 }))).json();
+      result.frames[iv] = d.error ? { error: d.error } : d;
+    } catch (e) {
+      result.frames[iv] = { error: 'انتهت المهلة' };
+    }
+  }
+  store.set('research:' + mk, result);
+  const best = bestOf(result);
+  if (best) store.set('best:' + mk, { strategy: best.strategy, interval: best.interval });
+  renderResearch(result);
 }
 
-function pick(key) {
-  strategy.value = key;
-  strategy.onchange();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+function bestOf(result) {
+  let best = null;
+  for (const [iv, d] of Object.entries(result.frames)) {
+    for (const r of d.results || []) {
+      if (r.verdict === 'strong' && (!best || r.stats.avgR > best.stats.avgR)) best = { ...r, interval: iv };
+    }
+  }
+  return best;
 }
 
-load();
+function renderResearch(result) {
+  const out = document.getElementById('researchOut');
+  if (!result) { out.innerHTML = '<div class="card muted">لم تُجرِ بحثاً لهذا السوق بعد. اضغط "ابدأ البحث".</div>'; return; }
+  const best = bestOf(result);
+  const ivs = META.timeframes;
+  const head = `<tr><th>الاستراتيجية</th>${ivs.map(iv => {
+    const d = result.frames[iv];
+    return `<th>${iv}${d && d.candleCount ? `<div class="muted">${days(d.candleCount, iv)} يوم</div>` : ''}</th>`;
+  }).join('')}</tr>`;
+  const rows = Object.entries(META.strategies).map(([key, s]) => `<tr><td>${s.name}</td>${ivs.map(iv => {
+    const d = result.frames[iv];
+    if (!d || d.error) return `<td class="cell muted">خطأ</td>`;
+    const r = d.results.find(x => x.strategy === key);
+    const st = r.stats;
+    if (!st.trades) return `<td class="cell muted">—</td>`;
+    const isBest = best && best.strategy === key && best.interval === iv;
+    return `<td class="cell ${r.verdict}${isBest ? ' best' : ''}"><b class="${st.avgR >= 0 ? 'pos' : 'neg'}">${st.avgR.toFixed(2)}R</b>${Math.round(st.winRate)}%·${st.trades}</td>`;
+  }).join('')}</tr>`).join('');
+  const errors = ivs.filter(iv => result.frames[iv] && result.frames[iv].error).map(iv => `${iv}: ${result.frames[iv].error}`);
+  const summary = best
+    ? `<div class="signal BUY" style="font-size:16px">الأفضل: ${best.name} على ${best.interval}</div>
+       <table style="margin-top:8px">
+         <tr><td>متوسط الصفقة</td><td class="num pos">${best.stats.avgR}R</td></tr>
+         <tr><td>نسبة النجاح</td><td class="num">${best.stats.winRate}%</td></tr>
+         <tr><td>عدد الصفقات</td><td class="num">${best.stats.trades}</td></tr>
+         <tr><td>Profit Factor</td><td class="num">${best.stats.profitFactor ?? '∞'}</td></tr>
+         <tr><td>النصف الأول / الثاني</td><td class="num">${best.stats.firstHalfR}R / ${best.stats.secondHalfR}R</td></tr>
+         <tr><td>أسوأ تراجع</td><td class="num neg">${best.stats.maxDrawdownR}R</td></tr>
+       </table>
+       <button onclick="applyBest()" style="width:100%;margin-top:10px">استخدم هذه الاستراتيجية في الإشارة</button>`
+    : `<div class="signal SELL" style="font-size:15px">لا توجد استراتيجية قوية وثابتة لهذا السوق بعد</div>
+       <p class="muted">لا تتداول هذا السوق بالنظام حتى نجد استراتيجية تنجح في الاختبار.</p>`;
+  out.innerHTML = `<div class="card"><h3>${META.markets[result.market].name} · ${new Date(result.date).toLocaleString('ar')}</h3>${summary}</div>
+    <div class="card"><h3>كل النتائج</h3><p class="muted">في كل خانة: متوسط الصفقة، ثم نسبة النجاح·عدد الصفقات. (—) لا صفقات</p>
+      <div class="matrix"><table>${head}${rows}</table></div>
+      ${errors.length ? `<p class="neg" style="font-size:13px">${errors.join('<br>')}</p>` : ''}</div>`;
+}
+
+function applyBest() {
+  const best = store.get('best:' + market.value);
+  if (!best) return;
+  strategy.value = best.strategy;
+  interval.value = best.interval;
+  saveSelection();
+  showTab('signal');
+  load();
+}
+
+function saveSelection() {
+  store.set('selection', { market: market.value, interval: interval.value, strategy: strategy.value });
+}
+
+async function init() {
+  META = await (await fetch('/markets')).json();
+  market.innerHTML = Object.entries(META.markets).map(([k, m]) => `<option value="${k}">${m.name}</option>`).join('');
+  interval.innerHTML = META.timeframes.map(iv => `<option>${iv}</option>`).join('');
+  strategy.innerHTML = Object.entries(META.strategies).map(([k, s]) => `<option value="${k}">${s.name}</option>`).join('');
+  const sel = store.get('selection') || { market: 'gold', interval: '1h', strategy: 'confluence' };
+  market.value = sel.market; interval.value = sel.interval; strategy.value = sel.strategy;
+  if (!market.value) market.selectedIndex = 0;
+  market.onchange = () => {
+    const best = store.get('best:' + market.value);
+    if (best) { strategy.value = best.strategy; interval.value = best.interval; }
+    saveSelection();
+    if (document.getElementById('researchView').classList.contains('hidden')) load();
+    else renderResearch(store.get('research:' + market.value));
+  };
+  interval.onchange = strategy.onchange = () => { saveSelection(); load(); };
+  load();
+}
+init();
 </script>
 </body>
 </html>

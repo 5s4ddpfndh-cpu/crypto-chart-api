@@ -1,16 +1,18 @@
 from flask import Flask, jsonify, render_template, request
 import requests
 
-from trading import analyze, backtest, compare, fetch_candles
-from trading.data import BINANCE_BASE
+from trading import analyze, backtest, compare
+from trading.data import BINANCE_BASE, fetch_market
+from trading.markets import MARKETS, TIMEFRAMES, get_market
 from trading.strategies import STRATEGIES, live_signal
 from trading.strategy import _add_sizing
 
 app = Flask(__name__)
 
 @app.route("/")
-def home():
-    return jsonify({"message": "Crypto Chart API is running"})
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
 
 @app.route("/klines")
 def klines():
@@ -60,17 +62,33 @@ def _strategy_arg():
     return strategy
 
 
+def _market_arg():
+    market = request.args.get("market", "btc")
+    return market, get_market(market)
+
+
 def _float_arg(name, default=None):
     value = request.args.get(name)
     return float(value) if value not in (None, "") else default
 
 
+@app.route("/markets")
+def markets_route():
+    """Markets, timeframes and strategies, so the dashboard can build its menus."""
+    return jsonify({
+        "markets": {k: {"name": m["name"], "symbol": m["symbol"], "feePct": m["fee_pct"], "note": m["note"]}
+                    for k, m in MARKETS.items()},
+        "timeframes": TIMEFRAMES,
+        "strategies": {k: {"name": s["name"], "description": s["description"]} for k, s in STRATEGIES.items()},
+    })
+
+
 @app.route("/analyze")
 def analyze_route():
-    symbol = request.args.get("symbol", "BTCUSDT").upper()
     interval = request.args.get("interval", "1h")
     try:
-        candles = fetch_candles(symbol, interval, request.args.get("limit", 500))
+        market, info = _market_arg()
+        candles = fetch_market(market, interval, request.args.get("limit", 500))
         strategy = _strategy_arg()
         balance, risk_pct = _float_arg("balance"), _float_arg("risk", 1.0)
         result = analyze(candles, balance=balance, risk_pct=risk_pct,
@@ -85,9 +103,11 @@ def analyze_route():
             result["signal"] = {"long": "BUY", "short": "SELL"}[plan["side"]] if plan else "WAIT"
         result["strategy"] = strategy
         result["strategyName"] = STRATEGIES[strategy]["name"]
+        result["lastCandleTime"] = candles[-1]["openTime"]
         if request.args.get("candles") == "1":
             result["candles"] = candles
-        return jsonify({"symbol": symbol, "interval": interval, **result})
+        return jsonify({"market": market, "symbol": info["symbol"], "name": info["name"],
+                        "note": info["note"], "interval": interval, **result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -95,12 +115,12 @@ def analyze_route():
 @app.route("/mtf")
 def multi_timeframe():
     """Multi-timeframe confluence: a trade is strongest when all timeframes agree."""
-    symbol = request.args.get("symbol", "BTCUSDT").upper()
     intervals = request.args.get("intervals", "4h,1h,15m").split(",")
     try:
+        market, info = _market_arg()
         frames = {}
         for interval in intervals:
-            result = analyze(fetch_candles(symbol, interval, 500))
+            result = analyze(fetch_market(market, interval, 500))
             frames[interval] = {
                 "signal": result["signal"],
                 "bias": result["bias"],
@@ -111,7 +131,8 @@ def multi_timeframe():
         aligned = len(biases) == 1 and "neutral" not in biases
         lowest = frames[intervals[-1]]
         return jsonify({
-            "symbol": symbol,
+            "market": market,
+            "symbol": info["symbol"],
             "aligned": aligned,
             "bias": biases.pop() if aligned else "mixed",
             "averageScore": round(sum(f["score"] for f in frames.values()) / len(frames), 1),
@@ -125,13 +146,14 @@ def multi_timeframe():
 
 @app.route("/backtest")
 def backtest_route():
-    symbol = request.args.get("symbol", "BTCUSDT").upper()
     interval = request.args.get("interval", "1h")
     try:
-        candles = fetch_candles(symbol, interval, request.args.get("limit", 1000))
+        market, info = _market_arg()
+        candles = fetch_market(market, interval, request.args.get("limit", 5000))
         result = backtest(candles, _strategy_arg(), min_rr=_float_arg("minRR", 1.5),
-                          fee_pct=_float_arg("fee", 0.1))
-        return jsonify({"symbol": symbol, "interval": interval, "candleCount": len(candles), **result})
+                          fee_pct=_float_arg("fee", info["fee_pct"]))
+        return jsonify({"market": market, "symbol": info["symbol"], "interval": interval,
+                        "candleCount": len(candles), "feePct": _float_arg("fee", info["fee_pct"]), **result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -139,14 +161,17 @@ def backtest_route():
 @app.route("/compare")
 def compare_route():
     """Backtest every strategy on the same candles and rank them."""
-    symbol = request.args.get("symbol", "BTCUSDT").upper()
-    interval = request.args.get("interval", "15m")
+    interval = request.args.get("interval", "1h")
     try:
-        candles = fetch_candles(symbol, interval, request.args.get("limit", 5000))
-        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=_float_arg("fee", 0.1))
+        market, info = _market_arg()
+        fee = _float_arg("fee", info["fee_pct"])
+        candles = fetch_market(market, interval, request.args.get("limit", 5000))
+        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=fee)
         return jsonify({
-            "symbol": symbol,
+            "market": market,
+            "symbol": info["symbol"],
             "interval": interval,
+            "feePct": fee,
             "candleCount": len(candles),
             "from": candles[0]["openTime"],
             "to": candles[-1]["openTime"],
@@ -154,8 +179,3 @@ def compare_route():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/dashboard")
-def dashboard():
-    return render_template("dashboard.html")
