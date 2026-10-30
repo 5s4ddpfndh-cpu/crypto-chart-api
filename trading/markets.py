@@ -52,6 +52,19 @@ MARKETS = {
 
 TIMEFRAMES = ("15m", "1h", "4h", "1d")
 
+# Setup on the first timeframe, entry timed on the second (see trading/hybrid.py).
+HYBRID_MODES = ("4h>15m", "1h>15m", "4h>1h")
+
+
+def split_hybrid(interval):
+    """'4h>15m' -> ('4h', '15m'); None for a plain timeframe."""
+    if ">" not in interval:
+        return None
+    htf, ltf = interval.split(">")
+    if htf not in TIMEFRAMES or ltf not in TIMEFRAMES or TIMEFRAMES.index(htf) <= TIMEFRAMES.index(ltf):
+        raise ValueError(f"hybrid interval must be higher>lower, e.g. 4h>15m, got '{interval}'")
+    return htf, ltf
+
 
 def get_market(key):
     if key not in MARKETS:

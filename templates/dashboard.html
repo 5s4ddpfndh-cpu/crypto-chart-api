@@ -96,6 +96,15 @@
     </div>
     <div id="researchOut"></div>
     <div class="card">
+      <h3>الإعداد من فريم كبير والدخول من فريم صغير</h3>
+      <p class="muted">يأخذ إشارة الاستراتيجية المختارة في الأعلى على الفريم الكبير (مثل 4h)، ثم ينتظر وصول السعر لمنطقة الدخول وشمعة تأكيد على الفريم الصغير (مثل 15m)، والوقف خلف قاع/قمة الفريم الصغير. ويقارنه بالاستراتيجية وحدها على نفس الفترة.</p>
+      <div class="row">
+        <select id="hybridMode"></select>
+        <button class="secondary" onclick="runHybrid()">اختبر</button>
+      </div>
+      <div id="hybridOut"></div>
+    </div>
+    <div class="card">
       <h3>كيف تقرأ النتائج</h3>
       <ul>
         <li><b>متوسط الصفقة (R)</b>: أهم رقم. 0.2R يعني أنك تربح في المتوسط 20% مما تخاطر به في كل صفقة.</li>
@@ -176,7 +185,14 @@ async function load() {
   d.zones.resistance.slice(0, 3).forEach(z => line(z.mid, 'rgba(239,83,80,.45)', 'مقاومة', 2));
 
   // Other strategies have no "possible scenario": they either have a setup now or not.
-  const shown = d.plan || (d.strategy === 'confluence' ? (d.score < 0 ? d.short : d.long) : null);
+  const hy = d.hybrid;
+  if (hy && hy.setup && !d.plan) {
+    const z = hy.setup.entryZone;
+    line(z.high, '#f0b429', `منطقة ${hy.htf}`, 1);
+    line(z.low, '#f0b429', `منطقة ${hy.htf}`, 1);
+    line(hy.setup.stopLoss, 'rgba(239,83,80,.6)', `إلغاء`, 2);
+  }
+  const shown = d.plan || (!hy && d.strategy === 'confluence' ? (d.score < 0 ? d.short : d.long) : null);
   if (shown) {
     line(shown.entryZone.high, '#58a6ff', 'دخول', 1);
     if (shown.entryZone.low !== shown.entryZone.high) line(shown.entryZone.low, '#58a6ff', 'دخول', 1);
@@ -184,9 +200,10 @@ async function load() {
     shown.targets.forEach((t, i) => line(t.price, '#26a69a', 'TP' + (i + 1)));
   }
   const offset = broker.value ? parseFloat(broker.value) - d.price : 0;
-  const planCard = shown
+  let planCard = shown
     ? `<h3>${d.plan ? 'خطة الصفقة' : 'السيناريو المحتمل (لا تدخل بعد)'}</h3>${planTable(shown, offset)}${shown.componentName ? `<p class="muted">الإشارة من: ${shown.componentName}</p>` : ''}${shown.barsAgo ? `<p class="muted">ظهرت الإشارة قبل ${shown.barsAgo} شمعة</p>` : ''}`
     : `<h3>لا توجد إشارة الآن</h3><p class="muted">استراتيجية "${d.strategyName}" لا تعطي صفقة حالياً. انتظر وأعد التحليل بعد إغلاق الشمعة التالية.</p>`;
+  if (hy) planCard = hybridCard(hy, d, offset) + (d.plan ? planCard : '');
   const best = store.get('best:' + market.value);
   const bestNote = best && (best.strategy !== strategy.value || best.interval !== interval.value)
     ? `<p class="warn" style="font-size:13px">أفضل تركيبة من آخر بحث: ${META.strategies[best.strategy].name} على ${best.interval} — <a href="#" onclick="applyBest();return false" style="color:var(--warn)">استخدمها</a></p>` : '';
@@ -200,6 +217,55 @@ async function load() {
     <div class="card"><h3>قواعد الخروج</h3><ul>${d.exitRules.map(r => `<li>${r}</li>`).join('')}</ul></div>
     <p class="muted">ℹ️ ${d.note}</p>
     <p class="muted">⚠️ أداة تحليل فقط وليست نصيحة مالية.</p>`;
+}
+
+function hybridLabel(m) {
+  const [h, l] = m.split('>');
+  return `${h} ← دخول ${l}`;
+}
+
+function hybridCard(hy, d, offset) {
+  const s = hy.setup;
+  const side = s ? (s.side === 'long' ? 'شراء' : 'بيع') : '';
+  const zone = s ? `${fmt(s.entryZone.low + offset)} – ${fmt(s.entryZone.high + offset)}` : '';
+  const trigger = s && s.side === 'long' ? 'خضراء تغلق فوق قمة الشمعة السابقة' : 'حمراء تغلق تحت قاع الشمعة السابقة';
+  const msg = {
+    none: `لا يوجد إعداد على ${hy.htf} حالياً. انتظر.`,
+    waiting_zone: `⏳ إعداد ${side} على ${hy.htf}. انتظر وصول السعر إلى المنطقة ${zone}. لا تدخل قبل التأكيد على ${hy.ltf}.`,
+    waiting_trigger: `👀 السعر داخل منطقة ${hy.htf} (${zone}). انتظر شمعة ${hy.ltf} ${trigger}.`,
+    triggered: `✅ تأكيد على ${hy.ltf}: ادخل الآن حسب الخطة أدناه.`,
+    done: 'تم تنفيذ آخر إشارة ووصلت للوقف أو الهدف الأول. انتظر الإعداد التالي.',
+    cancelled: 'أُلغي آخر إعداد: وصل السعر للوقف أو للهدف قبل الدخول.',
+    expired: 'انتهت صلاحية آخر إعداد دون تأكيد دخول.',
+  }[hy.state] || hy.state;
+  const extra = s && ['waiting_zone', 'waiting_trigger'].includes(hy.state)
+    ? `<p class="muted">يُلغى الإعداد إذا وصل السعر إلى ${fmt(s.stopLoss + offset)}. الوقف الفعلي يكون خلف قاع/قمة ${hy.ltf} عند التأكيد، والأهداف أهداف ${hy.htf}.</p>` : '';
+  return `<h3>الوضع: ${hy.htf} ← دخول ${hy.ltf}</h3><p class="${hy.state === 'triggered' ? 'pos' : 'warn'}">${msg}</p>${extra}`;
+}
+
+async function runHybrid() {
+  const out = document.getElementById('hybridOut');
+  const mode = hybridMode.value;
+  out.innerHTML = `<p class="muted">جارِ الاختبار… قد يستغرق دقيقة</p>`;
+  let d;
+  try {
+    d = await (await fetch('/hybrid?' + new URLSearchParams({ market: market.value, mode, strategy: strategy.value, cost: costValue() }))).json();
+  } catch (e) { d = { error: 'انتهت المهلة، حاول مرة أخرى' }; }
+  if (d.error) { out.innerHTML = `<p class="neg">${d.error}</p>`; return; }
+  const row = (label, f) => `<tr><td>${label}</td><td class="num">${f(d.baseline.stats)}</td><td class="num">${f(d.hybrid.stats)}</td></tr>`;
+  const n = v => v == null ? '—' : v;
+  out.innerHTML = `<p class="muted">${d.strategyName} · ${META.markets[d.market].name} · من ${new Date(d.from).toLocaleDateString('ar')} إلى ${new Date(d.to).toLocaleDateString('ar')} · التكلفة ${d.cost}</p>
+    <table><tr><th></th><th>${mode.split('>')[0]} فقط</th><th>${hybridLabel(mode)}</th></tr>
+    <tr><td>الحكم</td><td class="num">${VERDICT[d.baseline.verdict]}</td><td class="num">${VERDICT[d.hybrid.verdict]}</td></tr>
+    ${row('عدد الصفقات', s => n(s.trades))}
+    ${row('متوسط الصفقة', s => s.trades ? `<span class="${s.avgR >= 0 ? 'pos' : 'neg'}">${s.avgR}R</span>` : '—')}
+    ${row('t', s => n(s.tStat))}
+    ${row('نسبة النجاح', s => s.trades ? s.winRate + '%' : '—')}
+    ${row('مجموع R', s => n(s.totalR))}
+    ${row('Profit Factor', s => s.trades ? (s.profitFactor ?? '∞') : '—')}
+    ${row('أسوأ تراجع', s => n(s.maxDrawdownR))}
+    ${row('شراء / بيع', s => s.trades ? `${sideText(s.longs)} / ${sideText(s.shorts)}` : '—')}</table>
+    <p class="muted">نفس الفترة لكلا العمودين. الهجين أفضل فقط إذا كان متوسط الصفقة و t أعلى بعدد صفقات كافٍ (30+).</p>`;
 }
 
 function days(count, iv) {
@@ -313,7 +379,9 @@ function saveSelection() {
 async function init() {
   META = await (await fetch('/markets')).json();
   market.innerHTML = Object.entries(META.markets).map(([k, m]) => `<option value="${k}">${m.name}</option>`).join('');
-  interval.innerHTML = META.timeframes.map(iv => `<option>${iv}</option>`).join('');
+  interval.innerHTML = META.timeframes.map(iv => `<option>${iv}</option>`).join('')
+    + (META.hybridModes || []).map(m => `<option value="${m}">${hybridLabel(m)}</option>`).join('');
+  hybridMode.innerHTML = (META.hybridModes || []).map(m => `<option value="${m}">${hybridLabel(m)}</option>`).join('');
   strategy.innerHTML = Object.entries(META.strategies).map(([k, s]) => `<option value="${k}">${s.name}</option>`).join('');
   const sel = store.get('selection') || { market: 'gold', interval: '4h', strategy: 'combined' };
   market.value = sel.market; interval.value = sel.interval; strategy.value = sel.strategy;

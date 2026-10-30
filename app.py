@@ -6,7 +6,8 @@ import requests
 
 from trading import alerts, analyze, backtest, compare
 from trading.data import BINANCE_BASE, fetch_market
-from trading.markets import MARKETS, TIMEFRAMES, get_market
+from trading.hybrid import hybrid_backtest, hybrid_live
+from trading.markets import HYBRID_MODES, MARKETS, TIMEFRAMES, get_market, split_hybrid
 from trading.strategies import STRATEGIES, live_signal
 from trading.strategy import _add_sizing
 
@@ -84,6 +85,7 @@ def markets_route():
                         "feePct": m["fee_pct"], "cost": m["cost"], "note": m["note"]}
                     for k, m in MARKETS.items()},
         "timeframes": TIMEFRAMES,
+        "hybridModes": HYBRID_MODES,
         "strategies": {k: {"name": s["name"], "description": s["description"]} for k, s in STRATEGIES.items()},
     })
 
@@ -93,6 +95,8 @@ def analyze_route():
     interval = request.args.get("interval", "1h")
     try:
         market, info = _market_arg()
+        if split_hybrid(interval):
+            return jsonify(_analyze_hybrid(market, info, interval))
         candles = fetch_market(market, interval, request.args.get("limit", 500))
         strategy = _strategy_arg()
         balance, risk_pct = _float_arg("balance"), _float_arg("risk", 1.0)
@@ -113,6 +117,57 @@ def analyze_route():
             result["candles"] = candles
         return jsonify({"market": market, "symbol": info["symbol"], "name": info["name"],
                         "note": info["note"], "interval": interval, **result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _analyze_hybrid(market, info, interval):
+    """Setup on the higher timeframe, entry state on the lower one."""
+    htf_iv, ltf_iv = split_hybrid(interval)
+    strategy = _strategy_arg()
+    htf = fetch_market(market, htf_iv, 500)
+    ltf = fetch_market(market, ltf_iv, 500)
+    balance, risk_pct = _float_arg("balance"), _float_arg("risk", 1.0)
+    result = analyze(htf, balance=balance, risk_pct=risk_pct, min_rr=_float_arg("minRR", 1.5))
+    live = hybrid_live(htf, ltf, strategy, market)
+    plan = live["entry"] if live["state"] == "triggered" else None
+    if plan:
+        _add_sizing(plan, balance, risk_pct)
+    result.update(
+        plan=plan,
+        signal={"long": "BUY", "short": "SELL"}[plan["side"]] if plan else "WAIT",
+        price=ltf[-1]["close"],
+        strategy=strategy,
+        strategyName=STRATEGIES[strategy]["name"],
+        lastCandleTime=ltf[-1]["openTime"],
+        hybrid={"state": live["state"], "setup": live["setup"], "setupTime": live["setupTime"],
+                "htf": htf_iv, "ltf": ltf_iv},
+    )
+    if request.args.get("candles") == "1":
+        result["candles"] = ltf
+    return {"market": market, "symbol": info["symbol"], "name": info["name"],
+            "note": info["note"], "interval": interval, **result}
+
+
+@app.route("/hybrid")
+def hybrid_route():
+    """Backtest: higher-timeframe setups with lower-timeframe entries, against
+    the plain higher-timeframe strategy over the same period."""
+    try:
+        market, info = _market_arg()
+        htf_iv, ltf_iv = split_hybrid(request.args.get("mode", "4h>15m"))
+        strategy = _strategy_arg()
+        fee, cost = _float_arg("fee", info["fee_pct"]), _float_arg("cost", info["cost"])
+        htf = fetch_market(market, htf_iv, 6000)
+        ltf = fetch_market(market, ltf_iv, 6000)
+        result = hybrid_backtest(htf, ltf, strategy, market=market, min_rr=_float_arg("minRR", 1.5),
+                                 fee_pct=fee, cost=cost)
+        for side in ("hybrid", "baseline"):
+            result[side]["trades"] = result[side]["trades"][-30:]
+        return jsonify({"market": market, "symbol": info["symbol"], "mode": f"{htf_iv}>{ltf_iv}",
+                        "strategy": strategy, "strategyName": STRATEGIES[strategy]["name"],
+                        "feePct": fee, "cost": cost, "from": ltf[0]["openTime"], "to": ltf[-1]["openTime"],
+                        "ltfCandles": len(ltf), **result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

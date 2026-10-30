@@ -8,7 +8,10 @@ Configuration (environment variables):
   TELEGRAM_BOT_TOKEN  token from @BotFather
   TELEGRAM_CHAT_ID    chat that receives the alerts
   ALERT_KEY           optional secret required as ?key= on the alert routes
-  ALERT_WATCHLIST     market:interval:strategy entries, comma separated
+  ALERT_WATCHLIST     market:interval:strategy entries, comma separated.
+                      A hybrid interval such as 4h>15m sends two alerts: when a
+                      new 4h setup appears (wait for the zone), and when a 15m
+                      candle confirms the entry.
 """
 
 import os
@@ -17,7 +20,8 @@ import time
 import requests
 
 from .data import fetch_market
-from .markets import get_market
+from .hybrid import hybrid_live
+from .markets import get_market, split_hybrid
 from .strategies import STRATEGIES, new_signal
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
@@ -34,6 +38,7 @@ def watchlist():
     for item in os.environ.get("ALERT_WATCHLIST", DEFAULT_WATCHLIST).split(","):
         market, interval, strategy = item.strip().split(":")
         get_market(market)
+        split_hybrid(interval)  # validates hybrid intervals
         if strategy not in STRATEGIES:
             raise ValueError(f"unknown strategy '{strategy}' in ALERT_WATCHLIST")
         entries.append((market, interval, strategy))
@@ -73,6 +78,10 @@ def check_alerts(dashboard_url="", send=send_message, fetch=fetch_market):
     for market, interval, strategy in watchlist():
         entry = {"market": market, "interval": interval, "strategy": strategy}
         try:
+            if split_hybrid(interval):
+                entry.update(_check_hybrid(market, interval, strategy, send, fetch, dashboard_url))
+                results.append(entry)
+                continue
             candles = fetch(market, interval, 400)
             plan = new_signal(candles, strategy, market)
             if not plan:
@@ -92,6 +101,55 @@ def check_alerts(dashboard_url="", send=send_message, fetch=fetch_market):
         results.append(entry)
     last_check.update(time=time.time(), count=last_check["count"] + 1, results=results)
     return results
+
+
+def _check_hybrid(market, interval, strategy, send, fetch, dashboard_url):
+    htf_iv, ltf_iv = split_hybrid(interval)
+    htf, ltf = fetch(market, htf_iv, 400), fetch(market, ltf_iv, 400)
+    live = hybrid_live(htf, ltf, strategy, market)
+    state, setup = live["state"], live["setup"]
+    out = {"status": "no_signal", "state": state}
+    if state == "triggered" and live["entry"]["barsAgo"] <= 1:
+        plan = live["entry"]
+        key = (market, interval, strategy, "entry", plan["signalTime"], plan["side"])
+        if key in _sent:
+            out["status"] = "already_sent"
+        else:
+            send(format_message(market, f"{htf_iv} ← دخول {ltf_iv}", strategy, plan, ltf[-1]["close"], dashboard_url))
+            _sent[key] = time.time()
+            out["status"] = "sent"
+        out["side"] = plan["side"]
+    elif state in ("waiting_zone", "waiting_trigger") and live["setupTime"] == htf[-2]["openTime"]:
+        # A setup on the 4h candle that just closed: tell the trader to watch the zone.
+        key = (market, interval, strategy, "setup", live["setupTime"], setup["side"])
+        if key in _sent:
+            out["status"] = "already_sent"
+        else:
+            send(format_setup_message(market, htf_iv, ltf_iv, strategy, setup, ltf[-1]["close"], dashboard_url))
+            _sent[key] = time.time()
+            out["status"] = "sent_setup"
+        out["side"] = setup["side"]
+    return out
+
+
+def format_setup_message(market, htf_iv, ltf_iv, strategy, setup, price, dashboard_url=""):
+    info = get_market(market)
+    long = setup["side"] == "long"
+    zone = setup["entryZone"]
+    trigger = "تغلق فوق قمة الشمعة السابقة" if long else "تغلق تحت قاع الشمعة السابقة"
+    lines = [
+        f"⏳ {'إعداد شراء' if long else 'إعداد بيع'} على {htf_iv} — {info['name']} ({info['exness']})",
+        f"الاستراتيجية: {STRATEGIES[strategy]['name']}",
+        "",
+        f"لا تدخل الآن. انتظر وصول السعر إلى المنطقة {_num(zone['low'])} – {_num(zone['high'])}",
+        f"ثم شمعة {ltf_iv} {'خضراء' if long else 'حمراء'} {trigger}. ستصلك رسالة الدخول.",
+        f"يُلغى الإعداد إذا وصل السعر إلى {_num(setup['stopLoss'])}.",
+        "",
+        f"السعر الآن: {_num(price)} ({info['symbol']})",
+    ]
+    if dashboard_url:
+        lines.append(dashboard_url)
+    return "\n".join(lines)
 
 
 def format_message(market, interval, strategy, plan, price, dashboard_url=""):
