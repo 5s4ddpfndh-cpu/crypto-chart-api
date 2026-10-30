@@ -2,6 +2,10 @@
 on the same candles. Every strategy is a function `(ctx, i) -> plan | None`
 that may only look at data up to and including bar `i` (no look-ahead)."""
 
+from datetime import datetime, timezone
+from statistics import median
+from zoneinfo import ZoneInfo
+
 from .indicators import adx, atr, bollinger, ema, macd, rsi, sma, supertrend
 from .strategy import analyze, _r
 
@@ -18,8 +22,11 @@ def build_context(candles, market=None):
     line, signal, hist = macd(c)
     st_line, st_dir = supertrend(h, l, c)
     bb_upper, bb_mid, bb_lower = bollinger(c)
+    gaps = [b["openTime"] - a["openTime"] for a, b in zip(candles[-50:], candles[-49:])]
     return {
         "market": market,
+        "barMinutes": median(gaps) / 60000 if gaps else None,
+        "_cache": {},
         "candles": candles, "o": o, "h": h, "l": l, "c": c, "v": v,
         "ema20": ema(c, 20), "ema50": ema(c, 50), "ema200": ema(c, 200),
         "rsi": rsi(c), "macd": line, "macdSignal": signal, "hist": hist,
@@ -162,6 +169,126 @@ def bb_reversion(x, i, **_):
     return None
 
 
+def _minutes(hhmm):
+    hours, minutes = hhmm.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _local(x, tz):
+    """(local date, minute of day) of every bar's open, cached per time zone."""
+    key = ("local", tz)
+    if key not in x["_cache"]:
+        zone = ZoneInfo(tz)
+        local = []
+        for candle in x["candles"]:
+            t = datetime.fromtimestamp(candle["openTime"] / 1000, timezone.utc).astimezone(zone)
+            local.append((t.date(), t.hour * 60 + t.minute))
+        x["_cache"][key] = local
+    return x["_cache"][key]
+
+
+def _htf_trend(x, hours=4):
+    """Trend of the higher timeframe built from these candles: 1 up, -1 down,
+    0 unclear. Bar i only sees higher-timeframe candles that closed by its own close."""
+    key = ("htf", hours)
+    if key not in x["_cache"]:
+        bucket = hours * 3600 * 1000
+        starts, closes = [], []
+        for candle in x["candles"]:
+            start = candle["openTime"] - candle["openTime"] % bucket
+            if starts and starts[-1] == start:
+                closes[-1] = candle["close"]
+            else:
+                starts.append(start)
+                closes.append(candle["close"])
+        e20, e50 = ema(closes, 20), ema(closes, 50)
+        trend, k = [], -1
+        bar_ms = (x["barMinutes"] or 0) * 60000
+        for candle in x["candles"]:
+            while k + 1 < len(starts) and starts[k + 1] + bucket <= candle["openTime"] + bar_ms:
+                k += 1
+            if k < 0 or e50[k] is None:
+                trend.append(0)
+            elif e20[k] > e50[k] and closes[k] > e20[k]:
+                trend.append(1)
+            elif e20[k] < e50[k] and closes[k] < e20[k]:
+                trend.append(-1)
+            else:
+                trend.append(0)
+        x["_cache"][key] = trend
+    return x["_cache"][key]
+
+
+def mtf_pullback(x, i, **_):
+    """Intraday pullback to EMA20 only in the direction of the 4h trend, and
+    only during London and New York hours (07:00-20:00 UTC)."""
+    bar = x["barMinutes"]
+    if not bar or bar > 60 or not _ready(x, i):
+        return None
+    minute = _local(x, "UTC")[i][1]
+    if not 7 * 60 <= minute < 20 * 60:
+        return None
+    trend = _htf_trend(x)[i]
+    c, o, h, l, a = x["c"][i], x["o"][i], x["h"][i], x["l"][i], x["atr"][i]
+    e20, r = x["ema20"][i], x["rsi"][i]
+    if trend == 1 and l <= e20 < c and c > o and 40 <= r <= 70:
+        stop = _bounded_stop("long", c, min(x["l"][i - 5:i + 1]) - 0.2 * a, a)
+        return stop and market_plan("long", c, stop)
+    if trend == -1 and h >= e20 > c and c < o and 30 <= r <= 60:
+        stop = _bounded_stop("short", c, max(x["h"][i - 5:i + 1]) + 0.2 * a, a)
+        return stop and market_plan("short", c, stop)
+    return None
+
+
+def _range_breakout(x, i, cfg):
+    """First close outside a session range during its trading window. Stop at
+    the middle of the range (or 1.5 ATR when the range is too wide)."""
+    bar = x["barMinutes"]
+    if not cfg or not bar or bar > 30 or not x["atr"][i]:
+        return None
+    local = _local(x, cfg["tz"])
+    day, minute = local[i]
+    start, end, cutoff = _minutes(cfg["start"]), _minutes(cfg["end"]), _minutes(cfg["cutoff"])
+    if not (minute >= end and minute + bar <= cutoff):
+        return None
+    in_range, earlier = [], []
+    j = i - 1
+    while j >= 0 and local[j][0] == day and local[j][1] >= start:
+        (in_range if local[j][1] < end else earlier).append(j)
+        j -= 1
+    if len(in_range) < 0.8 * (end - start) / bar:
+        return None  # session missing from the data (holiday, gap)
+    hi = max(x["h"][k] for k in in_range)
+    lo = min(x["l"][k] for k in in_range)
+    if any(not lo <= x["c"][k] <= hi for k in earlier):
+        return None  # only the first breakout of the day counts
+    c, a = x["c"][i], x["atr"][i]
+    mid = (hi + lo) / 2
+    if c > hi:
+        stop = _bounded_stop("long", c, mid, a) or c - 1.5 * a
+        return market_plan("long", c, stop, (1.0, 2.0, 3.0))
+    if c < lo:
+        stop = _bounded_stop("short", c, mid, a) or c + 1.5 * a
+        return market_plan("short", c, stop, (1.0, 2.0, 3.0))
+    return None
+
+
+def _session_config(x, name):
+    from .markets import MARKETS
+    return MARKETS.get(x["market"] or "nasdaq", {}).get(name)
+
+
+def orb(x, i, **_):
+    """Opening range breakout: the first 30 minutes of the market's main session."""
+    return _range_breakout(x, i, _session_config(x, "orb"))
+
+
+def session_breakout(x, i, **_):
+    """Breakout of the quiet session before the main one (Asian range for gold,
+    pre-market for Nasdaq)."""
+    return _range_breakout(x, i, _session_config(x, "session_range"))
+
+
 def combined(x, i, **kwargs):
     """The market's best strategies together: the first one with a setup on
     this bar wins. More trades than any single strategy on its own."""
@@ -209,6 +336,21 @@ STRATEGIES = {
         "fn": bb_reversion,
         "name": "الارتداد داخل بولينجر",
         "description": "في سوق عرضي (ADX < 20)، الدخول عند عودة السعر داخل نطاق بولينجر",
+    },
+    "mtf_pullback": {
+        "fn": mtf_pullback,
+        "name": "ارتداد 15m مع ترند 4h",
+        "description": "ارتداد إلى EMA20 على الفريم الصغير في اتجاه ترند 4 ساعات فقط، وخلال جلستي لندن ونيويورك",
+    },
+    "orb": {
+        "fn": orb,
+        "name": "اختراق نطاق الافتتاح",
+        "description": "أول إغلاق خارج نطاق أول 30 دقيقة من الجلسة الرئيسية (فريم 30 دقيقة أو أقل)",
+    },
+    "session_breakout": {
+        "fn": session_breakout,
+        "name": "اختراق نطاق الجلسة",
+        "description": "أول إغلاق خارج نطاق الجلسة الهادئة (آسيا للذهب، ما قبل الافتتاح لناسداك)",
     },
     "combined": {
         "fn": combined,

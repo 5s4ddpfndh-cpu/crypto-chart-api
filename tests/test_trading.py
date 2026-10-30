@@ -321,5 +321,65 @@ class CombinedAndAlertTests(unittest.TestCase):
         self.assertIn("الذهب", body)
 
 
+class IntradayTests(unittest.TestCase):
+    @staticmethod
+    def day_of_15m(start_utc, opening_hi=101.0, breakout_close=102.0, bars=96):
+        """A flat day of 15m candles starting at `start_utc` (a datetime), with a
+        price range of 99-101 and one bar that closes at `breakout_close` at 10:00 New York."""
+        from zoneinfo import ZoneInfo
+        candles = []
+        for k in range(bars):
+            t = start_utc + __import__("datetime").timedelta(minutes=15 * k)
+            ny = t.astimezone(ZoneInfo("America/New_York"))
+            close = 100.0 + (0.5 if k % 2 else -0.5)
+            if (ny.hour, ny.minute) == (10, 0):
+                close = breakout_close
+            candles.append({"openTime": int(t.timestamp() * 1000), "open": 100.0,
+                            "high": max(close, opening_hi if (ny.hour, ny.minute) == (9, 30) else 100.6),
+                            "low": min(close, 99.0), "close": close, "volume": 1.0, "closeTime": None})
+        return candles
+
+    def signals(self, candles, key="orb"):
+        x = build_context(candles, "nasdaq")
+        fn = STRATEGIES[key]["fn"]
+        return [(i, fn(x, i)) for i in range(len(candles)) if fn(x, i)]
+
+    def test_orb_fires_once_at_ny_open_across_dst(self):
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        for day in (datetime(2026, 7, 15, tzinfo=timezone.utc), datetime(2026, 1, 15, tzinfo=timezone.utc)):
+            prev = self.day_of_15m(datetime(day.year, day.month, day.day - 1, tzinfo=timezone.utc), breakout_close=100.5)
+            today = self.day_of_15m(day)
+            candles = prev + today
+            found = self.signals(candles)
+            self.assertEqual(len(found), 1, day)
+            i, plan = found[0]
+            ny = datetime.fromtimestamp(candles[i]["openTime"] / 1000, timezone.utc).astimezone(ZoneInfo("America/New_York"))
+            self.assertEqual((ny.hour, ny.minute), (10, 0))
+            self.assertEqual(plan["side"], "long")
+            self.assertLess(plan["stopLoss"], plan["entry"])
+
+    def test_orb_ignores_hourly_candles(self):
+        candles = make_candles(400)
+        x = build_context(candles, "nasdaq")
+        self.assertTrue(all(STRATEGIES["orb"]["fn"](x, i) is None for i in range(250, 400)))
+
+    def test_intraday_strategies_do_not_look_ahead(self):
+        candles = [{**c, "openTime": 1_780_000_000_000 + i * 900_000} for i, c in enumerate(make_candles(1600, seed=4))]
+        full, cut = build_context(candles, "gold"), build_context(candles[:1200], "gold")
+        for key in ("mtf_pullback", "orb", "session_breakout"):
+            fn = STRATEGIES[key]["fn"]
+            for i in range(300, 1200):
+                self.assertEqual(fn(full, i), fn(cut, i), (key, i))
+
+    def test_intraday_backtest_runs(self):
+        candles = [{**c, "openTime": 1_780_000_000_000 + i * 900_000} for i, c in enumerate(make_candles(3000, drift=0.0003, seed=4))]
+        for key in ("mtf_pullback", "orb", "session_breakout"):
+            result = backtest(candles, key, fee_pct=0, market="gold")
+            for t in result["trades"]:
+                self.assertGreaterEqual(t["resultR"], -1.0001, key)
+        self.assertGreater(backtest(candles, "mtf_pullback", market="gold")["stats"]["trades"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
