@@ -107,6 +107,27 @@ class BacktestTests(unittest.TestCase):
         self.assertGreater(free["trades"], 0)
         self.assertLess(paid["totalR"], free["totalR"])
 
+    def test_price_unit_cost_reduces_results(self):
+        candles = make_candles(800, drift=0.001)
+        free = backtest(candles, "macd_trend", fee_pct=0)
+        paid = backtest(candles, "macd_trend", fee_pct=0, cost=0.5)
+        self.assertGreater(free["stats"]["trades"], 0)
+        self.assertLess(paid["stats"]["totalR"], free["stats"]["totalR"])
+        # The cost in R is the cost divided by the trade's own risk.
+        f, p = free["trades"][0], paid["trades"][0]
+        self.assertAlmostEqual(f["resultR"] - p["resultR"], 0.5 / abs(f["entry"] - f["stopLoss"]), places=2)
+
+    def test_stats_report_t_stat_and_sides(self):
+        stats = backtest(make_candles(1500, drift=0.0005, seed=3), "macd_trend", fee_pct=0)["stats"]
+        self.assertIn("tStat", stats)
+        self.assertEqual(stats["longs"]["trades"] + stats["shorts"]["trades"], stats["trades"])
+
+    def test_verdict_needs_significance(self):
+        from trading.backtest import verdict
+        base = {"trades": 40, "totalR": 4.0, "profitFactor": 1.5, "consistent": True}
+        self.assertEqual(verdict({**base, "tStat": 2.5}), "strong")
+        self.assertEqual(verdict({**base, "tStat": 0.8}), "weak")
+
     def test_every_strategy_produces_valid_trades(self):
         candles = make_candles(1500, drift=0.0005, seed=3)
         for key in STRATEGIES:
@@ -239,7 +260,9 @@ class ApiTests(unittest.TestCase):
     def test_compare(self):
         data = self.client.get("/compare?market=gold").get_json()
         self.assertEqual(len(data["results"]), len(STRATEGIES))
-        self.assertEqual(data["feePct"], 0.03)
+        self.assertEqual(data["feePct"], 0.0)
+        self.assertEqual(data["cost"], 0.30)
+        self.assertEqual(self.client.get("/compare?market=gold&cost=0.13").get_json()["cost"], 0.13)
         for r in data["results"]:
             self.assertIn(r["verdict"], ("strong", "weak", "few_trades", "losing"))
 
@@ -367,14 +390,44 @@ class IntradayTests(unittest.TestCase):
     def test_intraday_strategies_do_not_look_ahead(self):
         candles = [{**c, "openTime": 1_780_000_000_000 + i * 900_000} for i, c in enumerate(make_candles(1600, seed=4))]
         full, cut = build_context(candles, "gold"), build_context(candles[:1200], "gold")
-        for key in ("mtf_pullback", "orb", "session_breakout"):
+        for key in ("mtf_pullback", "orb", "session_breakout", "sweep_mss"):
             fn = STRATEGIES[key]["fn"]
             for i in range(300, 1200):
                 self.assertEqual(fn(full, i), fn(cut, i), (key, i))
 
+    def test_sweep_mss_finds_sweep_then_shift(self):
+        """Uptrend on 1h; at 10:00 UTC a wick sweeps the recent lows, then the
+        next 15m candle closes above the leg's high: one long, entry on the retest."""
+        from datetime import datetime, timezone
+        start = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        candles = []
+        for k in range(1200):
+            p = 100 + 0.01 * k + (0.15 if k % 2 else -0.15)
+            candles.append({"openTime": start + k * 900_000, "open": p - 0.05, "high": p + 0.2,
+                            "low": p - 0.2, "close": p, "volume": 1.0, "closeTime": None})
+        hour = lambda k: datetime.fromtimestamp(candles[k]["openTime"] / 1000, timezone.utc)
+        t = next(k for k in range(1100, 1200) if (hour(k).hour, hour(k).minute) == (10, 0))
+        base = candles[t - 7]["close"]
+        for n, k in enumerate(range(t - 6, t)):
+            p = base - 0.1 * (n + 1)
+            candles[k].update(open=p + 0.2, high=p + 0.3, low=p - 0.1, close=p)
+        swept = min(c["low"] for c in candles[t - 40:t]) - 0.3
+        candles[t].update(open=candles[t - 1]["close"], high=candles[t - 1]["close"] + 0.1,
+                          low=swept, close=candles[t - 1]["close"] + 0.05)
+        leg_high = max(c["high"] for c in candles[t - 6:t + 1])
+        candles[t + 1].update(open=candles[t]["close"], low=candles[t]["close"] - 0.1,
+                              close=leg_high + 0.5, high=leg_high + 0.6)
+        found = self.signals(candles[:t + 2], "sweep_mss")
+        self.assertEqual([i for i, _ in found], [t + 1])
+        plan = found[0][1]
+        self.assertEqual(plan["side"], "long")
+        self.assertFalse(plan["market"])
+        self.assertAlmostEqual(plan["entry"], leg_high, places=4)
+        self.assertLess(plan["stopLoss"], swept)
+
     def test_intraday_backtest_runs(self):
         candles = [{**c, "openTime": 1_780_000_000_000 + i * 900_000} for i, c in enumerate(make_candles(3000, drift=0.0003, seed=4))]
-        for key in ("mtf_pullback", "orb", "session_breakout"):
+        for key in ("mtf_pullback", "orb", "session_breakout", "sweep_mss"):
             result = backtest(candles, key, fee_pct=0, market="gold")
             for t in result["trades"]:
                 self.assertGreaterEqual(t["resultR"], -1.0001, key)

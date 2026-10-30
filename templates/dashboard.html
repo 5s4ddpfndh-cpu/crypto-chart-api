@@ -45,6 +45,7 @@
   .cell.strong { background:rgba(38,166,154,.25); }
   .cell.weak { background:rgba(240,180,41,.15); }
   .cell.losing { background:rgba(239,83,80,.12); }
+  .cell.few_trades { opacity:.45; }
   .cell.best { outline:2px solid var(--buy); }
   .cell b { display:block; font-size:13px; direction:ltr; }
   .hidden { display:none !important; }
@@ -72,6 +73,10 @@
       <input id="broker" type="number" step="any" placeholder="سعر منصتك الحالي (اختياري)" style="flex:1">
     </div>
     <p class="muted">إذا أدخلت سعر منصتك الحالي، تُعدَّل كل المستويات بفرق السعر بين مصدر البيانات ومنصتك.</p>
+    <div class="row">
+      <input id="cost" type="number" step="any" min="0" placeholder="تكلفة الصفقة" style="flex:1">
+    </div>
+    <p class="muted" id="costHelp">تكلفة الصفقة ذهاباً وإياباً بوحدة السعر (السبريد + العمولة + انزلاق). السبريد = سعر الشراء − سعر البيع في MT5. على فريم 15m هذا الرقم يغيّر النتائج كثيراً، فأدخل رقم منصتك.</p>
   </details>
 </header>
 <div class="tabs">
@@ -95,7 +100,9 @@
       <ul>
         <li><b>متوسط الصفقة (R)</b>: أهم رقم. 0.2R يعني أنك تربح في المتوسط 20% مما تخاطر به في كل صفقة.</li>
         <li><b>نسبة النجاح</b> وحدها مضللة: استراتيجية تربح 80% من الصفقات قد تخسر إذا كانت خسائرها أكبر من أرباحها.</li>
-        <li><span class="pos">أخضر = قوية</span>: 30 صفقة على الأقل، رابحة في النصف الأول والثاني من الفترة، وProfit Factor ≥ 1.3.</li>
+        <li><b>t</b>: قوة النتيجة إحصائياً (المتوسط ÷ خطأه المعياري). فوق 2 = غالباً ليست صدفة. تحت 1 = لا تختلف عن الصفر.</li>
+        <li><span class="pos">أخضر = قوية</span>: 30 صفقة على الأقل، رابحة في النصف الأول والثاني من الفترة، وProfit Factor ≥ 1.3، و t ≥ 2.</li>
+        <li><b>شراء / بيع</b>: إذا ربحت الاستراتيجية من جهة واحدة فقط، فقد تكون تركب اتجاه السوق في فترة الاختبار فقط.</li>
         <li><span class="warn">أصفر = ضعيفة</span>: رابحة لكن غير ثابتة أو هامشها صغير.</li>
         <li><span class="neg">أحمر = خاسرة</span>. الرمادي = صفقات قليلة جداً للحكم.</li>
       </ul>
@@ -203,11 +210,13 @@ function days(count, iv) {
 async function research() {
   const mk = market.value;
   const out = document.getElementById('researchOut');
-  const result = { market: mk, date: new Date().toISOString(), frames: {} };
+  const cost = costValue();
+  const result = { market: mk, date: new Date().toISOString(), cost, frames: {} };
   for (const iv of META.timeframes) {
     out.innerHTML = `<div class="card muted">جارِ اختبار ${META.markets[mk].name} على فريم ${iv}… (${Object.keys(result.frames).length + 1}/${META.timeframes.length}) قد يستغرق دقيقة لكل فريم</div>`;
     try {
-      const d = await (await fetch('/compare?' + new URLSearchParams({ market: mk, interval: iv, limit: 6000 }))).json();
+      const q = { market: mk, interval: iv, limit: 6000, cost };
+      const d = await (await fetch('/compare?' + new URLSearchParams(q))).json();
       result.frames[iv] = d.error ? { error: d.error } : d;
     } catch (e) {
       result.frames[iv] = { error: 'انتهت المهلة' };
@@ -245,7 +254,8 @@ function renderResearch(result) {
     const st = r.stats;
     if (!st.trades) return `<td class="cell muted">—</td>`;
     const isBest = best && best.strategy === key && best.interval === iv;
-    return `<td class="cell ${r.verdict}${isBest ? ' best' : ''}"><b class="${st.avgR >= 0 ? 'pos' : 'neg'}">${st.avgR.toFixed(2)}R</b>نجاح ${Math.round(st.winRate)}%<div class="muted" style="font-size:11px">${st.trades} صفقة</div></td>`;
+    const t = st.tStat != null ? `<div class="muted" style="font-size:11px;direction:ltr">t=${st.tStat}</div>` : '';
+    return `<td class="cell ${r.verdict}${isBest ? ' best' : ''}"><b class="${st.avgR >= 0 ? 'pos' : 'neg'}">${st.avgR.toFixed(2)}R</b>نجاح ${Math.round(st.winRate)}%<div class="muted" style="font-size:11px">${st.trades} صفقة</div>${t}</td>`;
   }).join('')}</tr>`).join('');
   const errors = ivs.filter(iv => result.frames[iv] && result.frames[iv].error).map(iv => `${iv}: ${result.frames[iv].error}`);
   const summary = best
@@ -255,16 +265,35 @@ function renderResearch(result) {
          <tr><td>نسبة النجاح</td><td class="num">${best.stats.winRate}%</td></tr>
          <tr><td>عدد الصفقات</td><td class="num">${best.stats.trades}</td></tr>
          <tr><td>Profit Factor</td><td class="num">${best.stats.profitFactor ?? '∞'}</td></tr>
+         <tr><td>t (قوة إحصائية)</td><td class="num">${best.stats.tStat ?? '—'}</td></tr>
          <tr><td>النصف الأول / الثاني</td><td class="num">${best.stats.firstHalfR}R / ${best.stats.secondHalfR}R</td></tr>
+         <tr><td>شراء / بيع</td><td class="num">${sideText(best.stats.longs)} / ${sideText(best.stats.shorts)}</td></tr>
          <tr><td>أسوأ تراجع</td><td class="num neg">${best.stats.maxDrawdownR}R</td></tr>
        </table>
        <button onclick="applyBest()" style="width:100%;margin-top:10px">استخدم هذه الاستراتيجية في الإشارة</button>`
     : `<div class="signal SELL" style="font-size:15px">لا توجد استراتيجية قوية وثابتة لهذا السوق بعد</div>
        <p class="muted">لا تتداول هذا السوق بالنظام حتى نجد استراتيجية تنجح في الاختبار.</p>`;
-  out.innerHTML = `<div class="card"><h3>${META.markets[result.market].name} · ${new Date(result.date).toLocaleString('ar')}</h3>${summary}</div>
+  const costNote = result.cost != null ? `<p class="muted">التكلفة المحتسبة لكل صفقة: ${result.cost} (بوحدة السعر)</p>` : '';
+  out.innerHTML = `<div class="card"><h3>${META.markets[result.market].name} · ${new Date(result.date).toLocaleString('ar')}</h3>${costNote}${summary}</div>
     <div class="card"><h3>كل النتائج</h3><p class="muted">في كل خانة: متوسط الصفقة، ثم نسبة النجاح، ثم عدد الصفقات. (—) لا صفقات</p>
       <div class="matrix"><table>${head}${rows}</table></div>
       ${errors.length ? `<p class="neg" style="font-size:13px">${errors.join('<br>')}</p>` : ''}</div>`;
+}
+
+function sideText(s) {
+  return s && s.trades ? `${s.totalR}R (${s.trades})` : '—';
+}
+
+function costValue() {
+  const v = parseFloat(document.getElementById('cost').value);
+  return isNaN(v) ? META.markets[market.value].cost : v;
+}
+
+function showCost() {
+  const saved = store.get('cost:' + market.value);
+  const input = document.getElementById('cost');
+  input.value = saved != null ? saved : '';
+  input.placeholder = `تكلفة الصفقة (الافتراضي ${META.markets[market.value].cost})`;
 }
 
 function applyBest() {
@@ -289,7 +318,13 @@ async function init() {
   const sel = store.get('selection') || { market: 'gold', interval: '4h', strategy: 'combined' };
   market.value = sel.market; interval.value = sel.interval; strategy.value = sel.strategy;
   if (!market.value) market.selectedIndex = 0;
+  showCost();
+  document.getElementById('cost').onchange = e => {
+    const v = parseFloat(e.target.value);
+    store.set('cost:' + market.value, isNaN(v) ? null : v);
+  };
   market.onchange = () => {
+    showCost();
     const best = store.get('best:' + market.value);
     if (best) { strategy.value = best.strategy; interval.value = best.interval; }
     saveSelection();
