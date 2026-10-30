@@ -178,7 +178,7 @@ async function load() {
   }
   const offset = broker.value ? parseFloat(broker.value) - d.price : 0;
   const planCard = shown
-    ? `<h3>${d.plan ? 'خطة الصفقة' : 'السيناريو المحتمل (لا تدخل بعد)'}</h3>${planTable(shown, offset)}${shown.barsAgo ? `<p class="muted">ظهرت الإشارة قبل ${shown.barsAgo} شمعة</p>` : ''}`
+    ? `<h3>${d.plan ? 'خطة الصفقة' : 'السيناريو المحتمل (لا تدخل بعد)'}</h3>${planTable(shown, offset)}${shown.componentName ? `<p class="muted">الإشارة من: ${shown.componentName}</p>` : ''}${shown.barsAgo ? `<p class="muted">ظهرت الإشارة قبل ${shown.barsAgo} شمعة</p>` : ''}`
     : `<h3>لا توجد إشارة الآن</h3><p class="muted">استراتيجية "${d.strategyName}" لا تعطي صفقة حالياً. انتظر وأعد التحليل بعد إغلاق الشمعة التالية.</p>`;
   const best = store.get('best:' + market.value);
   const bestNote = best && (best.strategy !== strategy.value || best.interval !== interval.value)
@@ -187,7 +187,7 @@ async function load() {
   const label = { BUY: 'شراء ▲', SELL: 'بيع ▼', WAIT: 'انتظار ⏸' }[d.signal];
   side.innerHTML = `
     <div class="card"><div class="signal ${d.signal}">${label}</div>
-      <p class="muted" style="text-align:center">${d.name} · السعر ${fmt(d.price)} · القوة ${d.score} / 100</p>${bestNote}</div>
+      <p class="muted" style="text-align:center">${d.name} (${META.markets[d.market].exness}) · السعر ${fmt(d.price)} · القوة ${d.score} / 100</p>${bestNote}</div>
     <div class="card"><p class="muted" style="margin:0 0 6px">الاستراتيجية: ${d.strategyName} · ${d.interval}</p>${planCard}</div>
     <div class="card"><h3>أسباب الاتجاه</h3><ul>${d.reasons.map(r => `<li class="${r.points > 0 ? 'pos' : 'neg'}">${r.points > 0 ? '+' : ''}${r.points} ${r.text}</li>`).join('')}</ul></div>
     <div class="card"><h3>قواعد الخروج</h3><ul>${d.exitRules.map(r => `<li>${r}</li>`).join('')}</ul></div>
@@ -245,7 +245,7 @@ function renderResearch(result) {
     const st = r.stats;
     if (!st.trades) return `<td class="cell muted">—</td>`;
     const isBest = best && best.strategy === key && best.interval === iv;
-    return `<td class="cell ${r.verdict}${isBest ? ' best' : ''}"><b class="${st.avgR >= 0 ? 'pos' : 'neg'}">${st.avgR.toFixed(2)}R</b>${Math.round(st.winRate)}%·${st.trades}</td>`;
+    return `<td class="cell ${r.verdict}${isBest ? ' best' : ''}"><b class="${st.avgR >= 0 ? 'pos' : 'neg'}">${st.avgR.toFixed(2)}R</b>نجاح ${Math.round(st.winRate)}%<div class="muted" style="font-size:11px">${st.trades} صفقة</div></td>`;
   }).join('')}</tr>`).join('');
   const errors = ivs.filter(iv => result.frames[iv] && result.frames[iv].error).map(iv => `${iv}: ${result.frames[iv].error}`);
   const summary = best
@@ -262,7 +262,7 @@ function renderResearch(result) {
     : `<div class="signal SELL" style="font-size:15px">لا توجد استراتيجية قوية وثابتة لهذا السوق بعد</div>
        <p class="muted">لا تتداول هذا السوق بالنظام حتى نجد استراتيجية تنجح في الاختبار.</p>`;
   out.innerHTML = `<div class="card"><h3>${META.markets[result.market].name} · ${new Date(result.date).toLocaleString('ar')}</h3>${summary}</div>
-    <div class="card"><h3>كل النتائج</h3><p class="muted">في كل خانة: متوسط الصفقة، ثم نسبة النجاح·عدد الصفقات. (—) لا صفقات</p>
+    <div class="card"><h3>كل النتائج</h3><p class="muted">في كل خانة: متوسط الصفقة، ثم نسبة النجاح، ثم عدد الصفقات. (—) لا صفقات</p>
       <div class="matrix"><table>${head}${rows}</table></div>
       ${errors.length ? `<p class="neg" style="font-size:13px">${errors.join('<br>')}</p>` : ''}</div>`;
 }
@@ -286,7 +286,7 @@ async function init() {
   market.innerHTML = Object.entries(META.markets).map(([k, m]) => `<option value="${k}">${m.name}</option>`).join('');
   interval.innerHTML = META.timeframes.map(iv => `<option>${iv}</option>`).join('');
   strategy.innerHTML = Object.entries(META.strategies).map(([k, s]) => `<option value="${k}">${s.name}</option>`).join('');
-  const sel = store.get('selection') || { market: 'gold', interval: '1h', strategy: 'confluence' };
+  const sel = store.get('selection') || { market: 'gold', interval: '4h', strategy: 'combined' };
   market.value = sel.market; interval.value = sel.interval; strategy.value = sel.strategy;
   if (!market.value) market.selectedIndex = 0;
   market.onchange = () => {

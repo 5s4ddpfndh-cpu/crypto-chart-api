@@ -1,7 +1,9 @@
+import os
+
 from flask import Flask, jsonify, render_template, request
 import requests
 
-from trading import analyze, backtest, compare
+from trading import alerts, analyze, backtest, compare
 from trading.data import BINANCE_BASE, fetch_market
 from trading.markets import MARKETS, TIMEFRAMES, get_market
 from trading.strategies import STRATEGIES, live_signal
@@ -76,7 +78,8 @@ def _float_arg(name, default=None):
 def markets_route():
     """Markets, timeframes and strategies, so the dashboard can build its menus."""
     return jsonify({
-        "markets": {k: {"name": m["name"], "symbol": m["symbol"], "feePct": m["fee_pct"], "note": m["note"]}
+        "markets": {k: {"name": m["name"], "symbol": m["symbol"], "exness": m["exness"],
+                        "feePct": m["fee_pct"], "note": m["note"]}
                     for k, m in MARKETS.items()},
         "timeframes": TIMEFRAMES,
         "strategies": {k: {"name": s["name"], "description": s["description"]} for k, s in STRATEGIES.items()},
@@ -96,7 +99,7 @@ def analyze_route():
         if strategy != "confluence":
             # Zones, score and reasons still come from the main analysis as
             # context; the signal and plan come from the chosen strategy.
-            plan = live_signal(candles, strategy)
+            plan = live_signal(candles, strategy, market=market)
             if plan:
                 _add_sizing(plan, balance, risk_pct)
             result["plan"] = plan
@@ -151,7 +154,7 @@ def backtest_route():
         market, info = _market_arg()
         candles = fetch_market(market, interval, request.args.get("limit", 5000))
         result = backtest(candles, _strategy_arg(), min_rr=_float_arg("minRR", 1.5),
-                          fee_pct=_float_arg("fee", info["fee_pct"]))
+                          fee_pct=_float_arg("fee", info["fee_pct"]), market=market)
         return jsonify({"market": market, "symbol": info["symbol"], "interval": interval,
                         "candleCount": len(candles), "feePct": _float_arg("fee", info["fee_pct"]), **result})
     except Exception as e:
@@ -166,7 +169,7 @@ def compare_route():
         market, info = _market_arg()
         fee = _float_arg("fee", info["fee_pct"])
         candles = fetch_market(market, interval, request.args.get("limit", 5000))
-        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=fee)
+        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=fee, market=market)
         return jsonify({
             "market": market,
             "symbol": info["symbol"],
@@ -177,5 +180,61 @@ def compare_route():
             "to": candles[-1]["openTime"],
             "results": results,
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _alert_key_ok():
+    key = os.environ.get("ALERT_KEY")
+    return not key or request.args.get("key") == key
+
+
+@app.route("/alerts/status")
+def alerts_status():
+    """What is configured, without revealing any secret."""
+    try:
+        watched = [{"market": m, "interval": i, "strategy": s} for m, i, s in alerts.watchlist()]
+        error = None
+    except Exception as e:
+        watched, error = [], str(e)
+    return jsonify({
+        "botToken": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
+        "chatId": bool(os.environ.get("TELEGRAM_CHAT_ID")),
+        "alertKey": bool(os.environ.get("ALERT_KEY")),
+        "watchlist": watched,
+        "error": error,
+    })
+
+
+@app.route("/alerts/chat-id")
+def alerts_chat_id():
+    if not _alert_key_ok():
+        return jsonify({"error": "wrong key"}), 403
+    try:
+        chats = alerts.recent_chats()
+        hint = None if chats else "أرسل أي رسالة لبوتك في Telegram ثم حدّث هذه الصفحة"
+        return jsonify({"chats": chats, "hint": hint})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/alerts/test")
+def alerts_test():
+    if not _alert_key_ok():
+        return jsonify({"error": "wrong key"}), 403
+    try:
+        alerts.send_message("✅ التنبيهات تعمل! ستصلك هنا إشارات الذهب وناسداك على فريم 4 ساعات.")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/alerts/check")
+def alerts_check():
+    """Called every 10-15 minutes by an external scheduler."""
+    if not _alert_key_ok():
+        return jsonify({"error": "wrong key"}), 403
+    try:
+        return jsonify({"results": alerts.check_alerts(dashboard_url=request.host_url)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

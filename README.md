@@ -49,6 +49,7 @@ flask run            # أو: gunicorn app:app
 | `macd_trend` | تقاطع MACD مع الترند | تقاطع MACD لخط الإشارة عكس الصفر في اتجاه الترند |
 | `supertrend` | Supertrend مع الترند | انقلاب Supertrend في اتجاه EMA200 مع ADX ≥ 20 |
 | `bb_reversion` | الارتداد داخل بولينجر | في سوق عرضي (ADX < 20)، عودة الإغلاق داخل نطاق بولينجر |
+| `combined` | المدمجة | تجمع الاستراتيجيات الرابحة لكل سوق (`combo` في `trading/markets.py`) |
 
 **ترتيب الاستراتيجيات** يعتمد على متوسط ربح الصفقة بوحدة R وليس نسبة النجاح وحدها. تُعتبر الاستراتيجية **قوية** فقط إذا كان لديها 30 صفقة على الأقل، وربحت في النصف الأول والثاني من الفترة، وProfit Factor ≥ 1.3.
 
@@ -68,6 +69,17 @@ flask run            # أو: gunicorn app:app
 | `GET /` | لوحة التحكم: الإشارة + البحث عن أفضل استراتيجية |
 
 حالة الخطة `status`: `in_zone` (السعر داخل منطقة الدخول)، `waiting` (ضع أمر Limit)، `invalidated` (الإعداد ملغى).
+
+## تنبيهات Telegram
+
+1. أنشئ بوتاً عبر [@BotFather](https://t.me/BotFather) وانسخ الـ token.
+2. في Render → Environment أضف: `TELEGRAM_BOT_TOKEN` و`ALERT_KEY` (كلمة سر من اختيارك).
+3. أرسل أي رسالة لبوتك، ثم افتح `/alerts/chat-id?key=ALERT_KEY` وانسخ `chatId` إلى `TELEGRAM_CHAT_ID`.
+4. جرّب: `/alerts/test?key=ALERT_KEY`.
+5. في [cron-job.org](https://cron-job.org) أنشئ مهمة كل 10 دقائق تفتح `/alerts/check?key=ALERT_KEY`.
+
+القائمة المراقبة افتراضياً: `gold:4h:combined,nasdaq:4h:combined`، ويمكن تغييرها بالمتغير `ALERT_WATCHLIST`.
+`/alerts/status` يعرض الإعدادات بدون كشف أي سر.
 
 ## الاختبارات
 

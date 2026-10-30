@@ -9,6 +9,9 @@ MARKETS = {
         "provider": "yahoo",
         "symbol": "GC=F",
         "fee_pct": 0.03,
+        # Strategies that were profitable on gold 4h in the research run.
+        "combo": ["breakout", "ema_pullback", "macd_trend"],
+        "exness": "XAUUSD",
         "note": "أسعار عقود الذهب الآجلة (GC=F) متأخرة ~10 دقائق وتختلف قليلاً عن سعر XAUUSD في منصتك",
     },
     "btc": {
@@ -16,6 +19,8 @@ MARKETS = {
         "provider": "binance",
         "symbol": "BTCUSDT",
         "fee_pct": 0.1,
+        "combo": ["breakout", "macd_trend"],
+        "exness": "BTCUSD",
         "note": "أسعار Binance مباشرة",
     },
     "nasdaq": {
@@ -23,6 +28,8 @@ MARKETS = {
         "provider": "yahoo",
         "symbol": "NQ=F",
         "fee_pct": 0.02,
+        "combo": ["confluence", "breakout", "ema_pullback", "macd_trend"],
+        "exness": "USTEC",
         "note": "أسعار عقود ناسداك الآجلة (NQ=F) متأخرة ~10 دقائق وتختلف قليلاً عن سعر NAS100 في منصتك",
     },
 }
