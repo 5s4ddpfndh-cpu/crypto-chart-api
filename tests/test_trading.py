@@ -305,6 +305,21 @@ class CombinedAndAlertTests(unittest.TestCase):
         status = client.get("/alerts/status").get_json()
         self.assertEqual(len(status["watchlist"]), 2)
 
+    def test_status_reports_last_check(self):
+        import app
+        from trading import alerts
+        with mock.patch.dict("os.environ", {"ALERT_WATCHLIST": "gold:4h:combined"}):
+            alerts.check_alerts(send=lambda text: None, fetch=lambda m, iv, limit: make_candles(400))
+        status = app.app.test_client().get("/alerts/status").get_json()
+        self.assertLess(status["lastCheckMinutesAgo"], 1)
+        self.assertGreaterEqual(status["checksSinceRestart"], 1)
+        self.assertEqual(status["lastResults"][0]["market"], "gold")
+
+    def test_json_keeps_arabic(self):
+        import app
+        body = app.app.test_client().get("/markets").get_data(as_text=True)
+        self.assertIn("الذهب", body)
+
 
 if __name__ == "__main__":
     unittest.main()
