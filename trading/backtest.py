@@ -13,9 +13,9 @@ PORTIONS = (0.5, 0.3, 0.2)
 DEFAULT_FEE_PCT = 0.1  # round trip, e.g. 0.05% taker fee on entry and on exit
 
 
-def backtest(candles, strategy="confluence", min_rr=1.5, fee_pct=DEFAULT_FEE_PCT, warmup=210):
+def backtest(candles, strategy="confluence", min_rr=1.5, fee_pct=DEFAULT_FEE_PCT, warmup=210, market=None):
     fn = STRATEGIES[strategy]["fn"]
-    x = build_context(candles)
+    x = build_context(candles, market)
     trades = []
     i = warmup
     # The last candle is still forming, so signals come only from closed bars.
@@ -34,11 +34,11 @@ def backtest(candles, strategy="confluence", min_rr=1.5, fee_pct=DEFAULT_FEE_PCT
     return {"strategy": strategy, "trades": trades, "stats": _stats(trades)}
 
 
-def compare(candles, min_rr=1.5, fee_pct=DEFAULT_FEE_PCT):
+def compare(candles, min_rr=1.5, fee_pct=DEFAULT_FEE_PCT, market=None):
     """Backtest every strategy on the same candles, best first."""
     results = []
     for key, meta in STRATEGIES.items():
-        stats = backtest(candles, key, min_rr=min_rr, fee_pct=fee_pct)["stats"]
+        stats = backtest(candles, key, min_rr=min_rr, fee_pct=fee_pct, market=market)["stats"]
         results.append({"strategy": key, "name": meta["name"],
                         "description": meta["description"], "stats": stats})
     for r in results:
@@ -117,6 +117,7 @@ def _simulate(candles, start, plan, fee_pct):
 def _trade(plan, entry, fill_index, exit_index, realized, hit, candles, open_=False):
     return {
         "side": plan["side"],
+        "component": plan.get("component"),
         "entry": entry,
         "stopLoss": plan["stopLoss"],
         "targets": [t["price"] for t in plan["targets"]],

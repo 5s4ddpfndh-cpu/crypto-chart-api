@@ -9,7 +9,7 @@ TARGET_MULTIPLES = (1.5, 2.5, 4.0)
 CONFLUENCE_WINDOW = 300
 
 
-def build_context(candles):
+def build_context(candles, market=None):
     o = [c["open"] for c in candles]
     h = [c["high"] for c in candles]
     l = [c["low"] for c in candles]
@@ -19,6 +19,7 @@ def build_context(candles):
     st_line, st_dir = supertrend(h, l, c)
     bb_upper, bb_mid, bb_lower = bollinger(c)
     return {
+        "market": market,
         "candles": candles, "o": o, "h": h, "l": l, "c": c, "v": v,
         "ema20": ema(c, 20), "ema50": ema(c, 50), "ema200": ema(c, 200),
         "rsi": rsi(c), "macd": line, "macdSignal": signal, "hist": hist,
@@ -161,6 +162,18 @@ def bb_reversion(x, i, **_):
     return None
 
 
+def combined(x, i, **kwargs):
+    """The market's best strategies together: the first one with a setup on
+    this bar wins. More trades than any single strategy on its own."""
+    from .markets import get_market
+    combo = get_market(x["market"])["combo"] if x["market"] else ["breakout", "ema_pullback", "macd_trend"]
+    for key in combo:
+        plan = STRATEGIES[key]["fn"](x, i, **kwargs)
+        if plan:
+            return {**plan, "component": key, "componentName": STRATEGIES[key]["name"]}
+    return None
+
+
 STRATEGIES = {
     "confluence": {
         "fn": confluence,
@@ -197,13 +210,18 @@ STRATEGIES = {
         "name": "الارتداد داخل بولينجر",
         "description": "في سوق عرضي (ADX < 20)، الدخول عند عودة السعر داخل نطاق بولينجر",
     },
+    "combined": {
+        "fn": combined,
+        "name": "المدمجة (أفضل استراتيجيات السوق)",
+        "description": "تجمع الاستراتيجيات الرابحة لكل سوق: أول استراتيجية تعطي إشارة يتم أخذها",
+    },
 }
 
 
-def live_signal(candles, strategy, lookback=3):
+def live_signal(candles, strategy, lookback=3, market=None):
     """Latest setup from the last `lookback` closed bars (the final candle is
     still forming), kept only while price has hit neither the stop nor TP1."""
-    x = build_context(candles)
+    x = build_context(candles, market)
     fn = STRATEGIES[strategy]["fn"]
     last = len(candles) - 1
     for i in range(last - 1, last - 1 - lookback, -1):
@@ -220,3 +238,19 @@ def live_signal(candles, strategy, lookback=3):
         plan["barsAgo"] = last - i
         return plan
     return None
+
+
+def new_signal(candles, strategy, market=None):
+    """A setup on the most recently closed bar that was not already there on
+    the bar before. Used for alerts so the same setup is announced once."""
+    x = build_context(candles, market)
+    fn = STRATEGIES[strategy]["fn"]
+    i = len(candles) - 2
+    plan = fn(x, i)
+    if not plan:
+        return None
+    previous = fn(x, i - 1)
+    if previous and previous["side"] == plan["side"]:
+        return None
+    plan["signalTime"] = candles[i]["openTime"]
+    return plan

@@ -248,5 +248,63 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/").status_code, 200)
 
 
+class CombinedAndAlertTests(unittest.TestCase):
+    def test_combined_takes_trades_from_components(self):
+        candles = make_candles(1500, drift=0.0005, seed=3)
+        combo = backtest(candles, "combined", fee_pct=0, market="gold")
+        components = {t["component"] for t in combo["trades"]}
+        self.assertTrue(components)
+        self.assertTrue(components <= {"breakout", "ema_pullback", "macd_trend"})
+        single = max(backtest(candles, k, fee_pct=0)["stats"].get("trades", 0) for k in components)
+        self.assertGreaterEqual(combo["stats"]["trades"], single)
+
+    def test_new_signal_only_on_fresh_setup(self):
+        from trading.strategies import new_signal
+        candles = make_candles(600, drift=0.001, seed=9)
+        x = build_context(candles, "gold")
+        fn = STRATEGIES["combined"]["fn"]
+        for end in range(300, 600):
+            plan = new_signal(candles[:end], "combined", "gold")
+            if plan:
+                self.assertEqual(plan["signalTime"], candles[end - 2]["openTime"])
+                prev = fn(x, end - 3)
+                self.assertFalse(prev and prev["side"] == plan["side"])
+
+    def test_check_alerts_sends_once_per_signal(self):
+        from trading import alerts
+        from trading.strategies import new_signal
+        candles = make_candles(600, drift=0.001, seed=9)
+        end = next(e for e in range(300, 600) if new_signal(candles[:e], "combined", "gold"))
+        sent = []
+        alerts._sent.clear()
+        with mock.patch.dict("os.environ", {"ALERT_WATCHLIST": "gold:4h:combined"}):
+            fetch = lambda m, iv, limit: candles[:end]
+            first = alerts.check_alerts("https://x/", send=sent.append, fetch=fetch)
+            second = alerts.check_alerts("https://x/", send=sent.append, fetch=fetch)
+        self.assertEqual(first[0]["status"], "sent")
+        self.assertEqual(second[0]["status"], "already_sent")
+        self.assertEqual(len(sent), 1)
+        self.assertIn("XAUUSD", sent[0])
+        self.assertIn("الوقف", sent[0])
+        alerts._sent.clear()
+
+    def test_bad_watchlist_reports_error(self):
+        from trading import alerts
+        with mock.patch.dict("os.environ", {"ALERT_WATCHLIST": "oil:4h:combined"}):
+            with self.assertRaises(ValueError):
+                alerts.watchlist()
+
+    def test_alert_routes_require_key(self):
+        import app
+        client = app.app.test_client()
+        with mock.patch.dict("os.environ", {"ALERT_KEY": "s3cret"}):
+            self.assertEqual(client.get("/alerts/check").status_code, 403)
+            self.assertEqual(client.get("/alerts/test?key=nope").status_code, 403)
+            with mock.patch("app.alerts.check_alerts", return_value=[]):
+                self.assertEqual(client.get("/alerts/check?key=s3cret").status_code, 200)
+        status = client.get("/alerts/status").get_json()
+        self.assertEqual(len(status["watchlist"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
