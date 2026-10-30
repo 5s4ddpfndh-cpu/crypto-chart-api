@@ -434,5 +434,96 @@ class IntradayTests(unittest.TestCase):
         self.assertGreater(backtest(candles, "mtf_pullback", market="gold")["stats"]["trades"], 0)
 
 
+def random_walk_15m(n, seed=1):
+    """15m candles of a pure random walk, starting on a 4h boundary."""
+    rng = random.Random(seed)
+    start = 1_780_000_000_000 - 1_780_000_000_000 % (4 * 3600 * 1000)
+    out, p = [], 100.0
+    for i in range(n):
+        o, c = p, p * (1 + rng.gauss(0, 0.002))
+        out.append({"openTime": start + i * 900_000, "open": o, "close": c, "volume": 1.0, "closeTime": None,
+                    "high": max(o, c) * (1 + abs(rng.gauss(0, 0.001))),
+                    "low": min(o, c) * (1 - abs(rng.gauss(0, 0.001)))})
+        p = c
+    return out
+
+
+class HybridTests(unittest.TestCase):
+    def setUp(self):
+        from trading.data import resample_4h
+        self.ltf = random_walk_15m(16000, seed=11)
+        self.htf = resample_4h([dict(c) for c in self.ltf])
+        self.resample = resample_4h
+
+    def test_split_hybrid(self):
+        from trading.markets import split_hybrid
+        self.assertEqual(split_hybrid("4h>15m"), ("4h", "15m"))
+        self.assertIsNone(split_hybrid("4h"))
+        with self.assertRaises(ValueError):
+            split_hybrid("15m>4h")
+
+    def test_trades_are_valid(self):
+        from trading.hybrid import hybrid_backtest
+        for key in ("confluence", "ema_pullback"):
+            result = hybrid_backtest(self.htf, self.ltf[-8000:], key, market="nasdaq", fee_pct=0)
+            self.assertGreater(result["hybrid"]["stats"]["trades"], 0, key)
+            for t in result["hybrid"]["trades"]:
+                direction = 1 if t["side"] == "long" else -1
+                self.assertGreater((t["entry"] - t["stopLoss"]) * direction, 0, key)
+                self.assertGreater((t["targets"][0] - t["entry"]) * direction, 0, key)
+                self.assertGreaterEqual(t["resultR"], -1.0001, key)
+            # The baseline only counts trades inside the lower-timeframe period.
+            for t in result["baseline"]["trades"]:
+                self.assertGreaterEqual(t["entryTime"], self.ltf[-8000]["openTime"])
+
+    def test_does_not_look_ahead(self):
+        from trading.hybrid import hybrid_backtest
+        ltf = self.ltf[-8000:]
+        cut = ltf[6000]["openTime"]
+        full = hybrid_backtest(self.htf, ltf, "confluence", market="nasdaq", fee_pct=0)["hybrid"]["trades"]
+        part = hybrid_backtest([c for c in self.htf if c["openTime"] < cut - 4 * 3600 * 1000],
+                               [c for c in ltf if c["openTime"] < cut], "confluence", market="nasdaq",
+                               fee_pct=0)["hybrid"]["trades"]
+        done = lambda trades: [t for t in trades if not t["open"] and t["exitTime"] < cut - 4 * 3600 * 1000]
+        self.assertGreater(len(done(full)), 0)
+        self.assertEqual(done(full), done(part))
+
+    def test_live_state(self):
+        from trading.hybrid import hybrid_live
+        states = {"none", "waiting_zone", "waiting_trigger", "triggered", "cancelled", "expired", "done"}
+        for end in range(9000, 9600, 37):
+            ltf = self.ltf[:end]
+            htf = self.resample([dict(c) for c in ltf])
+            live = hybrid_live(htf[-500:], ltf[-500:], "confluence", "nasdaq")
+            self.assertIn(live["state"], states)
+            if live["state"] in ("triggered", "done"):
+                self.assertIsNotNone(live["entry"])
+
+    def fake_fetch(self, market, interval, limit=500):
+        return (self.htf if interval == "4h" else self.ltf)[-int(limit):]
+
+    def test_api(self):
+        import app
+        client = app.app.test_client()
+        with mock.patch("app.fetch_market", side_effect=self.fake_fetch):
+            data = client.get("/hybrid?market=nasdaq&mode=4h>15m&strategy=confluence").get_json()
+            self.assertIn("hybrid", data)
+            self.assertIn("tStat", data["baseline"]["stats"] if data["baseline"]["stats"]["trades"] else {"tStat": 0})
+            data = client.get("/analyze?market=nasdaq&interval=4h>15m&strategy=confluence&candles=1").get_json()
+            self.assertIn(data["hybrid"]["state"], ("none", "waiting_zone", "waiting_trigger", "triggered",
+                                                    "cancelled", "expired", "done"))
+            self.assertIn(data["signal"], ("BUY", "SELL", "WAIT"))
+            self.assertEqual(len(data["candles"]), 500)
+            self.assertIn("4h>15m", client.get("/markets").get_json()["hybridModes"])
+
+    def test_alerts_accept_hybrid(self):
+        from trading import alerts
+        sent = []
+        with mock.patch.dict("os.environ", {"ALERT_WATCHLIST": "nasdaq:4h>15m:confluence"}):
+            results = alerts.check_alerts(send=sent.append, fetch=self.fake_fetch)
+        self.assertEqual(len(results), 1)
+        self.assertNotEqual(results[0]["status"], "error", results[0])
+
+
 if __name__ == "__main__":
     unittest.main()
