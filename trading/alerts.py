@@ -25,6 +25,8 @@ DEFAULT_WATCHLIST = "gold:4h:combined,nasdaq:4h:combined"
 
 # Signals already announced, so repeated checks within the same candle stay quiet.
 _sent = {}
+# When the scheduler last called check_alerts, to confirm it is running.
+last_check = {"time": None, "count": 0, "results": None}
 
 
 def watchlist():
@@ -88,6 +90,7 @@ def check_alerts(dashboard_url="", send=send_message, fetch=fetch_market):
             entry["status"] = "error"
             entry["error"] = str(e)
         results.append(entry)
+    last_check.update(time=time.time(), count=last_check["count"] + 1, results=results)
     return results
 
 

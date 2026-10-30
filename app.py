@@ -1,4 +1,5 @@
 import os
+import time
 
 from flask import Flask, jsonify, render_template, request
 import requests
@@ -10,6 +11,7 @@ from trading.strategies import STRATEGIES, live_signal
 from trading.strategy import _add_sizing
 
 app = Flask(__name__)
+app.json.ensure_ascii = False  # show Arabic text as-is in JSON responses
 
 @app.route("/")
 @app.route("/dashboard")
@@ -203,6 +205,11 @@ def alerts_status():
         "alertKey": bool(os.environ.get("ALERT_KEY")),
         "watchlist": watched,
         "error": error,
+        # Resets when the server restarts; a recent time means the scheduler is calling us.
+        "lastCheckMinutesAgo": round((time.time() - alerts.last_check["time"]) / 60, 1)
+                               if alerts.last_check["time"] else None,
+        "checksSinceRestart": alerts.last_check["count"],
+        "lastResults": alerts.last_check["results"],
     })
 
 
