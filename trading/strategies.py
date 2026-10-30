@@ -2,7 +2,7 @@
 on the same candles. Every strategy is a function `(ctx, i) -> plan | None`
 that may only look at data up to and including bar `i` (no look-ahead)."""
 
-from .indicators import atr, ema, macd, rsi, sma
+from .indicators import adx, atr, bollinger, ema, macd, rsi, sma, supertrend
 from .strategy import analyze, _r
 
 TARGET_MULTIPLES = (1.5, 2.5, 4.0)
@@ -16,11 +16,15 @@ def build_context(candles):
     c = [x["close"] for x in candles]
     v = [x["volume"] for x in candles]
     line, signal, hist = macd(c)
+    st_line, st_dir = supertrend(h, l, c)
+    bb_upper, bb_mid, bb_lower = bollinger(c)
     return {
         "candles": candles, "o": o, "h": h, "l": l, "c": c, "v": v,
         "ema20": ema(c, 20), "ema50": ema(c, 50), "ema200": ema(c, 200),
         "rsi": rsi(c), "macd": line, "macdSignal": signal, "hist": hist,
-        "atr": atr(h, l, c), "volAvg": sma(v, 20),
+        "atr": atr(h, l, c), "volAvg": sma(v, 20), "adx": adx(h, l, c),
+        "stLine": st_line, "stDir": st_dir,
+        "bbUpper": bb_upper, "bbMid": bb_mid, "bbLower": bb_lower,
     }
 
 
@@ -123,6 +127,40 @@ def macd_trend(x, i, **_):
     return None
 
 
+def supertrend_trend(x, i, **_):
+    """Supertrend flips in the direction of the EMA200 trend, with ADX showing a real trend."""
+    if not _ready(x, i) or x["stDir"][i - 1] is None or x["adx"][i] is None:
+        return None
+    c, a, e200 = x["c"][i], x["atr"][i], x["ema200"][i]
+    flipped_up = x["stDir"][i - 1] == -1 and x["stDir"][i] == 1
+    flipped_down = x["stDir"][i - 1] == 1 and x["stDir"][i] == -1
+    if x["adx"][i] < 20:
+        return None
+    if flipped_up and c > e200:
+        stop = _bounded_stop("long", c, x["stLine"][i], a)
+        return stop and market_plan("long", c, stop)
+    if flipped_down and c < e200:
+        stop = _bounded_stop("short", c, x["stLine"][i], a)
+        return stop and market_plan("short", c, stop)
+    return None
+
+
+def bb_reversion(x, i, **_):
+    """In a range (ADX < 20), fade a close back inside the Bollinger Bands."""
+    if not _ready(x, i) or x["bbLower"][i - 1] is None or x["adx"][i] is None:
+        return None
+    if x["adx"][i] >= 20:
+        return None
+    c, a = x["c"][i], x["atr"][i]
+    if x["c"][i - 1] < x["bbLower"][i - 1] and c > x["bbLower"][i]:
+        stop = _bounded_stop("long", c, min(x["l"][i - 3:i + 1]) - 0.3 * a, a)
+        return stop and market_plan("long", c, stop, (1.0, 2.0, 3.0))
+    if x["c"][i - 1] > x["bbUpper"][i - 1] and c < x["bbUpper"][i]:
+        stop = _bounded_stop("short", c, max(x["h"][i - 3:i + 1]) + 0.3 * a, a)
+        return stop and market_plan("short", c, stop, (1.0, 2.0, 3.0))
+    return None
+
+
 STRATEGIES = {
     "confluence": {
         "fn": confluence,
@@ -148,6 +186,16 @@ STRATEGIES = {
         "fn": macd_trend,
         "name": "تقاطع MACD مع الترند",
         "description": "تقاطع MACD لخط الإشارة تحت الصفر في ترند صاعد (والعكس)",
+    },
+    "supertrend": {
+        "fn": supertrend_trend,
+        "name": "Supertrend مع الترند",
+        "description": "انقلاب مؤشر Supertrend في اتجاه EMA200 بشرط ترند قوي (ADX ≥ 20)",
+    },
+    "bb_reversion": {
+        "fn": bb_reversion,
+        "name": "الارتداد داخل بولينجر",
+        "description": "في سوق عرضي (ADX < 20)، الدخول عند عودة السعر داخل نطاق بولينجر",
     },
 }
 

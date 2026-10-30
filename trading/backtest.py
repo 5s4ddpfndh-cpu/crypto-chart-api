@@ -41,8 +41,29 @@ def compare(candles, min_rr=1.5, fee_pct=DEFAULT_FEE_PCT):
         stats = backtest(candles, key, min_rr=min_rr, fee_pct=fee_pct)["stats"]
         results.append({"strategy": key, "name": meta["name"],
                         "description": meta["description"], "stats": stats})
-    results.sort(key=lambda r: (r["stats"].get("trades", 0) >= 20, r["stats"].get("totalR", -1e9)), reverse=True)
+    for r in results:
+        r["verdict"] = verdict(r["stats"])
+    order = {"strong": 3, "weak": 2, "few_trades": 1, "losing": 0}
+    results.sort(key=lambda r: (order[r["verdict"]], r["stats"].get("avgR", -1e9)), reverse=True)
     return results
+
+
+MIN_TRADES = 30
+
+
+def verdict(stats):
+    """strong: enough trades, profitable in both halves, profit factor >= 1.3.
+    Ranking uses expectancy (average R per trade), not win rate: a high win
+    rate with small wins and large losses still loses money."""
+    trades = stats.get("trades", 0)
+    if trades < MIN_TRADES:
+        return "few_trades"
+    if stats["totalR"] <= 0:
+        return "losing"
+    pf = stats["profitFactor"]
+    if stats.get("consistent") and (pf is None or pf >= 1.3):
+        return "strong"
+    return "weak"
 
 
 def _simulate(candles, start, plan, fee_pct):

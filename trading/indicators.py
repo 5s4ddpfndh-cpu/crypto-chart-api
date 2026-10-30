@@ -115,3 +115,64 @@ def pivots(highs, lows, left=3, right=3):
         if lows[i] == min(window_l) and window_l.count(lows[i]) == 1:
             found.append({"index": i, "price": lows[i], "type": "low"})
     return found
+
+
+def adx(highs, lows, closes, period=14):
+    """Wilder's Average Directional Index: trend strength regardless of direction."""
+    n = len(closes)
+    out = [None] * n
+    if n <= 2 * period:
+        return out
+    tr = true_range(highs, lows, closes)
+    plus_dm, minus_dm = [0.0], [0.0]
+    for i in range(1, n):
+        up, down = highs[i] - highs[i - 1], lows[i - 1] - lows[i]
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+    tr_s = sum(tr[1:period + 1])
+    p_s, m_s = sum(plus_dm[1:period + 1]), sum(minus_dm[1:period + 1])
+    dx = []
+    for i in range(period, n):
+        if i > period:
+            tr_s = tr_s - tr_s / period + tr[i]
+            p_s = p_s - p_s / period + plus_dm[i]
+            m_s = m_s - m_s / period + minus_dm[i]
+        p_di = 100 * p_s / tr_s if tr_s else 0
+        m_di = 100 * m_s / tr_s if tr_s else 0
+        dx.append(100 * abs(p_di - m_di) / (p_di + m_di) if p_di + m_di else 0)
+        if len(dx) == period:
+            value = sum(dx) / period
+            out[i] = value
+        elif len(dx) > period:
+            value = (value * (period - 1) + dx[-1]) / period
+            out[i] = value
+    return out
+
+
+def supertrend(highs, lows, closes, period=10, mult=3.0):
+    """Returns (line, direction) where direction is 1 for uptrend, -1 for downtrend."""
+    n = len(closes)
+    line, direction = [None] * n, [None] * n
+    atr_values = atr(highs, lows, closes, period)
+    upper = lower = None
+    for i in range(n):
+        a = atr_values[i]
+        if a is None:
+            continue
+        mid = (highs[i] + lows[i]) / 2
+        basic_upper, basic_lower = mid + mult * a, mid - mult * a
+        if upper is None:
+            upper, lower, d = basic_upper, basic_lower, 1
+        else:
+            prev_upper, prev_lower, prev = upper, lower, direction[i - 1]
+            upper = basic_upper if basic_upper < prev_upper or closes[i - 1] > prev_upper else prev_upper
+            lower = basic_lower if basic_lower > prev_lower or closes[i - 1] < prev_lower else prev_lower
+            if prev == -1 and closes[i] > prev_upper:
+                d = 1
+            elif prev == 1 and closes[i] < prev_lower:
+                d = -1
+            else:
+                d = prev
+        direction[i] = d
+        line[i] = lower if d == 1 else upper
+    return line, direction

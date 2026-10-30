@@ -138,6 +138,50 @@ class BacktestTests(unittest.TestCase):
 
 
 class DataTests(unittest.TestCase):
+    def yahoo_payload(self, start, count, step=3600):
+        ts = [start + i * step for i in range(count)]
+        closes = [100 + i for i in range(count)]
+        closes[3] = None  # Yahoo sometimes returns gaps
+        return {"chart": {"error": None, "result": [{
+            "timestamp": ts,
+            "indicators": {"quote": [{
+                "open": closes, "high": [c and c + 1 for c in closes],
+                "low": [c and c - 1 for c in closes], "close": closes,
+                "volume": [10] * count,
+            }]},
+        }]}}
+
+    def test_yahoo_parses_and_skips_gaps(self):
+        from trading.data import fetch_yahoo
+        response = mock.Mock()
+        response.json.return_value = self.yahoo_payload(1_700_000_000 - 1_700_000_000 % 14400, 12)
+        with mock.patch("trading.data.requests.get", return_value=response) as get:
+            candles = fetch_yahoo("GC=F", "1h")
+        self.assertEqual(len(candles), 11)
+        self.assertEqual(get.call_args.kwargs["params"], {"interval": "60m", "range": "730d"})
+        self.assertEqual(candles[0]["openTime"] % 1000, 0)
+
+    def test_yahoo_4h_resamples(self):
+        from trading.data import fetch_yahoo
+        response = mock.Mock()
+        response.json.return_value = self.yahoo_payload(1_700_000_000 - 1_700_000_000 % 14400, 12)
+        with mock.patch("trading.data.requests.get", return_value=response):
+            bars = fetch_yahoo("GC=F", "4h")
+        self.assertEqual(len(bars), 3)
+        self.assertEqual(bars[0]["open"], 100)
+        self.assertEqual(bars[0]["close"], 102)  # the hour at index 3 is a gap
+        self.assertEqual(bars[1]["high"], 108)
+        self.assertEqual(bars[1]["volume"], 40)
+
+    def test_fetch_market_uses_cache(self):
+        from trading import data
+        data._cache.clear()
+        with mock.patch("trading.data.fetch_yahoo", return_value=make_candles(300)) as fy:
+            data.fetch_market("gold", "1h", 200)
+            data.fetch_market("gold", "1h", 100)
+        self.assertEqual(fy.call_count, 1)
+        data._cache.clear()
+
     def test_fetch_pages_backwards(self):
         def fake_get(url, params, timeout):
             end = params.get("endTime", 10_000)
@@ -159,16 +203,25 @@ class ApiTests(unittest.TestCase):
     def setUp(self):
         import app
         self.client = app.app.test_client()
-        self.patch = mock.patch("app.fetch_candles", return_value=make_candles(drift=0.003))
+        self.patch = mock.patch("app.fetch_market", return_value=make_candles(drift=0.003))
         self.patch.start()
 
     def tearDown(self):
         self.patch.stop()
 
     def test_analyze(self):
-        data = self.client.get("/analyze?symbol=btcusdt&balance=1000").get_json()
-        self.assertEqual(data["symbol"], "BTCUSDT")
-        self.assertIn("long", data)
+        for market, symbol in (("btc", "BTCUSDT"), ("gold", "GC=F"), ("nasdaq", "NQ=F")):
+            data = self.client.get(f"/analyze?market={market}&balance=1000").get_json()
+            self.assertEqual(data["symbol"], symbol)
+            self.assertIn("long", data)
+
+    def test_unknown_market(self):
+        self.assertEqual(self.client.get("/analyze?market=oil").status_code, 500)
+
+    def test_markets(self):
+        data = self.client.get("/markets").get_json()
+        self.assertEqual(set(data["markets"]), {"gold", "btc", "nasdaq"})
+        self.assertEqual(set(data["strategies"]), set(STRATEGIES))
 
     def test_mtf(self):
         data = self.client.get("/mtf").get_json()
@@ -184,11 +237,15 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/backtest?strategy=nope").status_code, 500)
 
     def test_compare(self):
-        data = self.client.get("/compare").get_json()
+        data = self.client.get("/compare?market=gold").get_json()
         self.assertEqual(len(data["results"]), len(STRATEGIES))
+        self.assertEqual(data["feePct"], 0.03)
+        for r in data["results"]:
+            self.assertIn(r["verdict"], ("strong", "weak", "few_trades", "losing"))
 
     def test_dashboard(self):
         self.assertEqual(self.client.get("/dashboard").status_code, 200)
+        self.assertEqual(self.client.get("/").status_code, 200)
 
 
 if __name__ == "__main__":
