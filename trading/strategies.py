@@ -55,6 +55,14 @@ def market_plan(side, entry, stop, multiples=TARGET_MULTIPLES):
     }
 
 
+def limit_plan(side, entry, stop, multiples=TARGET_MULTIPLES):
+    """A plan entered with a limit order at `entry`; the backtest fills it only
+    if price comes back to it within a few bars."""
+    plan = market_plan(side, entry, stop, multiples)
+    plan.update(market=False, status="waiting", source="support" if side == "long" else "resistance")
+    return plan
+
+
 def _bounded_stop(side, entry, raw_stop, a, low=0.5, high=3.0):
     """Clamp the stop distance to [low, high] ATR; None if wider than `high`."""
     direction = 1 if side == "long" else -1
@@ -240,6 +248,84 @@ def mtf_pullback(x, i, **_):
     return None
 
 
+def _htf_ema_side(x, hours=1, period=200):
+    """1 when the last closed higher-timeframe candle closed above its EMA(period),
+    -1 below, 0 before there is enough history. No look-ahead: bar i only sees
+    higher-timeframe candles that closed by its own close."""
+    key = ("htf_ema", hours, period)
+    if key not in x["_cache"]:
+        bucket = hours * 3600 * 1000
+        starts, closes = [], []
+        for candle in x["candles"]:
+            start = candle["openTime"] - candle["openTime"] % bucket
+            if starts and starts[-1] == start:
+                closes[-1] = candle["close"]
+            else:
+                starts.append(start)
+                closes.append(candle["close"])
+        line = ema(closes, period)
+        side, k = [], -1
+        bar_ms = (x["barMinutes"] or 0) * 60000
+        for candle in x["candles"]:
+            while k + 1 < len(starts) and starts[k + 1] + bucket <= candle["openTime"] + bar_ms:
+                k += 1
+            if k < 0 or line[k] is None:
+                side.append(0)
+            else:
+                side.append(1 if closes[k] > line[k] else -1 if closes[k] < line[k] else 0)
+        x["_cache"][key] = side
+    return x["_cache"][key]
+
+
+SWEEP_LOOKBACK = 8   # the sweep happened within the last 8 bars (2h on 15m)
+LIQ_WINDOW = 32      # liquidity = extreme of the 32 bars (8h on 15m) before the sweep...
+LIQ_GAP = 3          # ...that formed at least 3 bars before it
+MSS_LOOKBACK = 6     # structure level = extreme of the 6 bars leading into the sweep
+
+
+def sweep_mss(x, i, **_):
+    """S5: liquidity sweep + market structure shift, with the 1h EMA200 trend.
+    Long: price is above the 1h EMA200, a recent low (resting stops) is swept by
+    a wick, then a 15m candle closes above the high of the leg into the sweep
+    for the first time. Stop beyond the sweep. London/New York hours only."""
+    bar = x["barMinutes"]
+    if not bar or bar > 30 or not _ready(x, i, lookback=LIQ_WINDOW + SWEEP_LOOKBACK + MSS_LOOKBACK):
+        return None
+    minute = _local(x, "UTC")[i][1]
+    if not 7 * 60 <= minute < 20 * 60:
+        return None
+    trend = _htf_ema_side(x)[i]
+    if trend == 0:
+        return None
+    h, l, c, o, a = x["h"], x["l"], x["c"], x["o"], x["atr"][i]
+    d = trend  # 1 long, -1 short
+    if (c[i] - o[i]) * d <= 0:
+        return None  # the shift candle must close in the trade direction
+    for s in range(i - 1, i - 1 - SWEEP_LOOKBACK, -1):
+        if d == 1:
+            level = min(l[s - LIQ_WINDOW:s - LIQ_GAP + 1])
+            extreme = l[s]
+            swept = extreme < level and extreme == min(l[s:i + 1])
+            mss_level = max(h[s - MSS_LOOKBACK:s + 1])
+            fresh = all(c[j] <= mss_level for j in range(s, i))
+            shifted = c[i] > mss_level and c[i] > level
+        else:
+            level = max(h[s - LIQ_WINDOW:s - LIQ_GAP + 1])
+            extreme = h[s]
+            swept = extreme > level and extreme == max(h[s:i + 1])
+            mss_level = min(l[s - MSS_LOOKBACK:s + 1])
+            fresh = all(c[j] >= mss_level for j in range(s, i))
+            shifted = c[i] < mss_level and c[i] < level
+        if swept and fresh and shifted:
+            # Enter on the retest of the broken structure level (limit order),
+            # not at the close of the shift candle, which is often far from the
+            # sweep and would make the stop too wide.
+            side = "long" if d == 1 else "short"
+            stop = _bounded_stop(side, mss_level, extreme - d * 0.1 * a, a)
+            return stop and limit_plan(side, mss_level, stop)
+    return None
+
+
 def _range_breakout(x, i, cfg):
     """First close outside a session range during its trading window. Stop at
     the middle of the range (or 1.5 ATR when the range is too wide)."""
@@ -341,6 +427,11 @@ STRATEGIES = {
         "fn": mtf_pullback,
         "name": "ارتداد 15m مع ترند 4h",
         "description": "ارتداد إلى EMA20 على الفريم الصغير في اتجاه ترند 4 ساعات فقط، وخلال جلستي لندن ونيويورك",
+    },
+    "sweep_mss": {
+        "fn": sweep_mss,
+        "name": "S5: سحب السيولة + كسر الهيكل",
+        "description": "في اتجاه EMA200 على ساعة: سحب قاع/قمة سابقة بذيل ثم إغلاق 15m يكسر هيكل الموجة، خلال لندن ونيويورك (فريم 30 دقيقة أو أقل)",
     },
     "orb": {
         "fn": orb,

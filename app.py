@@ -81,7 +81,7 @@ def markets_route():
     """Markets, timeframes and strategies, so the dashboard can build its menus."""
     return jsonify({
         "markets": {k: {"name": m["name"], "symbol": m["symbol"], "exness": m["exness"],
-                        "feePct": m["fee_pct"], "note": m["note"]}
+                        "feePct": m["fee_pct"], "cost": m["cost"], "note": m["note"]}
                     for k, m in MARKETS.items()},
         "timeframes": TIMEFRAMES,
         "strategies": {k: {"name": s["name"], "description": s["description"]} for k, s in STRATEGIES.items()},
@@ -155,10 +155,11 @@ def backtest_route():
     try:
         market, info = _market_arg()
         candles = fetch_market(market, interval, request.args.get("limit", 5000))
+        fee, cost = _float_arg("fee", info["fee_pct"]), _float_arg("cost", info["cost"])
         result = backtest(candles, _strategy_arg(), min_rr=_float_arg("minRR", 1.5),
-                          fee_pct=_float_arg("fee", info["fee_pct"]), market=market)
+                          fee_pct=fee, market=market, cost=cost)
         return jsonify({"market": market, "symbol": info["symbol"], "interval": interval,
-                        "candleCount": len(candles), "feePct": _float_arg("fee", info["fee_pct"]), **result})
+                        "candleCount": len(candles), "feePct": fee, "cost": cost, **result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -169,14 +170,15 @@ def compare_route():
     interval = request.args.get("interval", "1h")
     try:
         market, info = _market_arg()
-        fee = _float_arg("fee", info["fee_pct"])
+        fee, cost = _float_arg("fee", info["fee_pct"]), _float_arg("cost", info["cost"])
         candles = fetch_market(market, interval, request.args.get("limit", 5000))
-        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=fee, market=market)
+        results = compare(candles, min_rr=_float_arg("minRR", 1.5), fee_pct=fee, market=market, cost=cost)
         return jsonify({
             "market": market,
             "symbol": info["symbol"],
             "interval": interval,
             "feePct": fee,
+            "cost": cost,
             "candleCount": len(candles),
             "from": candles[0]["openTime"],
             "to": candles[-1]["openTime"],
