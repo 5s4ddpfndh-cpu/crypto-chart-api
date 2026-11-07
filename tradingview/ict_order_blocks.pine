@@ -1,0 +1,111 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// ICT Order Blocks — آخر شمعة عكسية قبل كسر الهيكل (BOS)
+//@version=5
+indicator("ICT Order Blocks", "ICT OB", overlay = true, max_boxes_count = 500, max_bars_back = 500)
+
+// ───── Inputs ─────
+swingLen   = input.int(10, "Swing Length (طول القمة/القاع)", minval = 2)
+maxOB      = input.int(5, "Max OBs per side (أقصى عدد لكل اتجاه)", minval = 1, maxval = 50)
+useBody    = input.bool(false, "Use candle body instead of wicks (استخدام جسم الشمعة)")
+invMethod  = input.string("Close", "Invalidation (الإلغاء)", options = ["Close", "Wick"])
+delBroken  = input.bool(true, "Delete broken OBs (حذف البلوكات المكسورة)")
+showText   = input.bool(true, "Show labels")
+bullCol    = input.color(color.new(color.teal, 75), "Bullish OB")
+bearCol    = input.color(color.new(color.red, 75), "Bearish OB")
+brokenCol  = input.color(color.new(color.gray, 85), "Broken OB")
+
+// ───── Swing points ─────
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+
+var float shPrice = na
+var int   shBar   = na
+var bool  shUsed  = true
+var float slPrice = na
+var int   slBar   = na
+var bool  slUsed  = true
+
+if not na(ph)
+    shPrice := ph
+    shBar   := bar_index - swingLen
+    shUsed  := false
+if not na(pl)
+    slPrice := pl
+    slBar   := bar_index - swingLen
+    slUsed  := false
+
+var array<box> bullOBs = array.new<box>()
+var array<box> bearOBs = array.new<box>()
+
+// ───── Manage existing OBs (extend / invalidate) ─────
+manage(array<box> arr, bool isBull) =>
+    if array.size(arr) > 0
+        for i = array.size(arr) - 1 to 0
+            b   = array.get(arr, i)
+            top = box.get_top(b)
+            bot = box.get_bottom(b)
+            src = invMethod == "Close" ? close : (isBull ? low : high)
+            broken = isBull ? src < bot : src > top
+            box.set_right(b, bar_index)
+            if broken
+                array.remove(arr, i)
+                if delBroken
+                    box.delete(b)
+                else
+                    box.set_bgcolor(b, brokenCol)
+                    box.set_border_color(b, brokenCol)
+
+manage(bullOBs, true)
+manage(bearOBs, false)
+
+// ───── Bullish OB: close breaks above swing high → last/lowest down-close candle ─────
+newBull = false
+if not shUsed and close > shPrice
+    shUsed := true
+    n = math.min(bar_index - shBar, 450)
+    int   idx = na
+    float ext = na
+    for i = 1 to n
+        if close[i] < open[i] and (na(ext) or low[i] < ext)
+            ext := low[i]
+            idx := i
+    if na(idx)
+        for i = 1 to n
+            if na(ext) or low[i] < ext
+                ext := low[i]
+                idx := i
+    if not na(idx)
+        top = useBody ? math.max(open[idx], close[idx]) : high[idx]
+        bot = useBody ? math.min(open[idx], close[idx]) : low[idx]
+        array.push(bullOBs, box.new(bar_index - idx, top, bar_index, bot, border_color = color.new(color.teal, 30), bgcolor = bullCol, text = showText ? "Bull OB" : "", text_color = color.teal, text_size = size.small, text_halign = text.align_right))
+        newBull := true
+        if array.size(bullOBs) > maxOB
+            box.delete(array.shift(bullOBs))
+
+// ───── Bearish OB: close breaks below swing low → last/highest up-close candle ─────
+newBear = false
+if not slUsed and close < slPrice
+    slUsed := true
+    n = math.min(bar_index - slBar, 450)
+    int   idx = na
+    float ext = na
+    for i = 1 to n
+        if close[i] > open[i] and (na(ext) or high[i] > ext)
+            ext := high[i]
+            idx := i
+    if na(idx)
+        for i = 1 to n
+            if na(ext) or high[i] > ext
+                ext := high[i]
+                idx := i
+    if not na(idx)
+        top = useBody ? math.max(open[idx], close[idx]) : high[idx]
+        bot = useBody ? math.min(open[idx], close[idx]) : low[idx]
+        array.push(bearOBs, box.new(bar_index - idx, top, bar_index, bot, border_color = color.new(color.red, 30), bgcolor = bearCol, text = showText ? "Bear OB" : "", text_color = color.red, text_size = size.small, text_halign = text.align_right))
+        newBear := true
+        if array.size(bearOBs) > maxOB
+            box.delete(array.shift(bearOBs))
+
+// ───── Alerts ─────
+alertcondition(newBull, "New Bullish OB", "New Bullish Order Block on {{ticker}} {{interval}}")
+alertcondition(newBear, "New Bearish OB", "New Bearish Order Block on {{ticker}} {{interval}}")

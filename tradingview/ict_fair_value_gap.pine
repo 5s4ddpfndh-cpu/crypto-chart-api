@@ -1,0 +1,67 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// ICT Fair Value Gap (FVG) — فجوة بين الشمعة 1 والشمعة 3
+//@version=5
+indicator("ICT Fair Value Gap", "ICT FVG", overlay = true, max_boxes_count = 500, max_lines_count = 500)
+
+// ───── Inputs ─────
+minATR     = input.float(0.0, "Min gap size (x ATR) — 0 = all (أقل حجم للفجوة)", minval = 0, step = 0.1)
+maxFVG     = input.int(15, "Max active FVGs (أقصى عدد)", minval = 1, maxval = 200)
+mitMode    = input.string("Full fill", "Mitigation (الإغلاق)", options = ["Touch", "50% (CE)", "Full fill"])
+delFilled  = input.bool(true, "Delete filled FVGs (حذف الفجوات الممتلئة)")
+showCE     = input.bool(true, "Show 50% line (Consequent Encroachment)")
+showText   = input.bool(true, "Show labels")
+bullCol    = input.color(color.new(color.green, 80), "Bullish FVG")
+bearCol    = input.color(color.new(color.orange, 80), "Bearish FVG")
+filledCol  = input.color(color.new(color.gray, 88), "Filled FVG")
+
+type FVG
+    box  b
+    line ce
+    bool bull
+
+var array<FVG> fvgs = array.new<FVG>()
+
+atr = ta.atr(14)
+
+// ───── Manage existing FVGs ─────
+if array.size(fvgs) > 0
+    for i = array.size(fvgs) - 1 to 0
+        f   = array.get(fvgs, i)
+        top = box.get_top(f.b)
+        bot = box.get_bottom(f.b)
+        mid = (top + bot) / 2
+        lvl = f.bull ? (mitMode == "Touch" ? top : mitMode == "50% (CE)" ? mid : bot) : (mitMode == "Touch" ? bot : mitMode == "50% (CE)" ? mid : top)
+        filled = f.bull ? low <= lvl : high >= lvl
+        box.set_right(f.b, bar_index)
+        line.set_x2(f.ce, bar_index)
+        if filled
+            array.remove(fvgs, i)
+            if delFilled
+                box.delete(f.b)
+                line.delete(f.ce)
+            else
+                box.set_bgcolor(f.b, filledCol)
+                box.set_border_color(f.b, filledCol)
+
+// ───── Detect new FVGs ─────
+bullFVG = low > high[2] and (low - high[2]) >= atr * minATR
+bearFVG = high < low[2] and (low[2] - high) >= atr * minATR
+
+newFVG(float top, float bot, bool isBull) =>
+    col = isBull ? bullCol : bearCol
+    b = box.new(bar_index - 2, top, bar_index, bot, border_color = col, bgcolor = col, text = showText ? (isBull ? "Bull FVG" : "Bear FVG") : "", text_color = isBull ? color.green : color.orange, text_size = size.small, text_halign = text.align_right)
+    l = showCE ? line.new(bar_index - 2, (top + bot) / 2, bar_index, (top + bot) / 2, color = color.new(isBull ? color.green : color.orange, 20), style = line.style_dashed) : na
+    array.push(fvgs, FVG.new(b, l, isBull))
+    if array.size(fvgs) > maxFVG
+        old = array.shift(fvgs)
+        box.delete(old.b)
+        line.delete(old.ce)
+
+if bullFVG
+    newFVG(low, high[2], true)
+if bearFVG
+    newFVG(low[2], high, false)
+
+// ───── Alerts ─────
+alertcondition(bullFVG, "New Bullish FVG", "New Bullish FVG on {{ticker}} {{interval}}")
+alertcondition(bearFVG, "New Bearish FVG", "New Bearish FVG on {{ticker}} {{interval}}")
