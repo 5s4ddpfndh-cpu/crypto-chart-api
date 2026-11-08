@@ -33,7 +33,8 @@ if array.size(fvgs) > 0
         lvl = f.bull ? (mitMode == "Touch" ? top : mitMode == "50% (CE)" ? mid : bot) : (mitMode == "Touch" ? bot : mitMode == "50% (CE)" ? mid : top)
         filled = f.bull ? low <= lvl : high >= lvl
         box.set_right(f.b, bar_index)
-        line.set_x2(f.ce, bar_index)
+        if not na(f.ce)
+            line.set_x2(f.ce, bar_index)
         if filled
             array.remove(fvgs, i)
             if delFilled

@@ -1,0 +1,792 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT Toolkit - All in One
+// Market Structure (BOS / MSS) | Order Blocks | Breaker Blocks | FVG | Inversion FVG | BPR | Volume Imbalance
+// Liquidity (BSL / SSL / EQH / EQL / Sweeps) | Premium / Discount | OTE | Targets | Killzones | Silver Bullet | Macros
+// PDH / PDL / PWH / PWL / PMH / PML | IPDA 20/40/60 | Midnight / 08:30 / Weekly Open | NWOG / NDOG
+// Displacement | SMT Divergence | Dashboard | Alerts
+//@version=5
+indicator("ICT Toolkit - All in One", "ICT Toolkit", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500, max_bars_back = 500)
+
+//==============================================================================
+// INPUTS
+//==============================================================================
+G_MS  = "1. Market Structure | هيكل السوق"
+G_OB  = "2. Order Blocks & Breakers | الأوردر بلوك والبريكر"
+G_FVG = "3. FVG / IFVG / BPR / VI | الفجوات"
+G_LIQ = "4. Liquidity | السيولة"
+G_PD  = "5. Premium / Discount & OTE | الغلاء والرخص"
+G_KZ  = "6. Killzones (New York time) | الكيل زون"
+G_LV  = "7. Key Levels | المستويات المهمة"
+G_GAP = "8. Opening Gaps | فجوات الافتتاح"
+G_DSP = "9. Displacement | الاندفاع"
+G_SMT = "10. SMT Divergence | التباعد"
+G_DB  = "11. Dashboard | لوحة المعلومات"
+
+// 1. Market structure
+msShow    = input.bool(true, "Show BOS / MSS", group = G_MS)
+msLen     = input.int(5, "Swing length", minval = 2, maxval = 50, group = G_MS, tooltip = "Bars on each side of a swing high / low. Small = internal structure, large = external structure.")
+msConfirm = input.string("Close", "Break confirmation", options = ["Close", "Wick"], group = G_MS)
+msMax     = input.int(15, "Max breaks shown", minval = 1, maxval = 100, group = G_MS)
+msBullCol = input.color(#089981, "Bullish", inline = "ms", group = G_MS)
+msBearCol = input.color(#F23645, "Bearish", inline = "ms", group = G_MS)
+
+// 2. Order blocks & breakers
+obShow    = input.bool(true, "Show order blocks", group = G_OB, tooltip = "Last opposite candle before the move that broke structure.")
+obMax     = input.int(3, "Max per side", minval = 1, maxval = 20, group = G_OB)
+obBody    = input.bool(false, "Use candle body (instead of wicks)", group = G_OB)
+obBullCol = input.color(color.new(#089981, 80), "Bullish OB", inline = "ob", group = G_OB)
+obBearCol = input.color(color.new(#F23645, 80), "Bearish OB", inline = "ob", group = G_OB)
+bbShow    = input.bool(true, "Show breaker blocks", group = G_OB, tooltip = "An order block that fails (a candle closes through it) flips into a breaker with the opposite role.")
+bbBullCol = input.color(color.new(#2962FF, 80), "Bullish breaker", inline = "bb", group = G_OB)
+bbBearCol = input.color(color.new(#E040FB, 80), "Bearish breaker", inline = "bb", group = G_OB)
+
+// 3. Fair value gaps
+fvgShow    = input.bool(true, "Show fair value gaps (FVG)", group = G_FVG)
+fvgMax     = input.int(10, "Max shown (each type)", minval = 1, maxval = 50, group = G_FVG)
+fvgMinAtr  = input.float(0.0, "Min size (x ATR)", minval = 0, step = 0.05, group = G_FVG, tooltip = "0 = all gaps. 0.25 - 0.5 hides small gaps.")
+fvgMit     = input.string("Full fill", "Mitigation", options = ["Touch", "50% (CE)", "Full fill"], group = G_FVG)
+fvgCE      = input.bool(true, "Show 50% line (consequent encroachment)", group = G_FVG)
+fvgBullCol = input.color(color.new(#00BCD4, 80), "Bullish FVG", inline = "fvg", group = G_FVG)
+fvgBearCol = input.color(color.new(#FF9800, 80), "Bearish FVG", inline = "fvg", group = G_FVG)
+ifvgShow   = input.bool(true, "Inversion FVG (IFVG)", inline = "ifvg", group = G_FVG, tooltip = "When a candle closes through an FVG it flips and becomes an inversion FVG with the opposite role.")
+ifvgCol    = input.color(color.new(#9C27B0, 80), "", inline = "ifvg", group = G_FVG)
+bprShow    = input.bool(false, "Balanced price range (BPR)", inline = "bpr", group = G_FVG, tooltip = "Overlap of a bullish and a bearish FVG.")
+bprCol     = input.color(color.new(#FFEB3B, 75), "", inline = "bpr", group = G_FVG)
+viShow     = input.bool(false, "Volume imbalance (VI)", inline = "vi", group = G_FVG, tooltip = "Two candles whose bodies do not overlap while their wicks do.")
+viCol      = input.color(color.new(#787B86, 65), "", inline = "vi", group = G_FVG)
+
+// 4. Liquidity
+liqShow   = input.bool(true, "Show buy-side / sell-side liquidity", group = G_LIQ, tooltip = "BSL rests above swing highs, SSL below swing lows. EQH / EQL = equal highs / lows.")
+liqLen    = input.int(10, "Swing length", minval = 2, maxval = 50, group = G_LIQ)
+liqMax    = input.int(4, "Max levels per side", minval = 1, maxval = 20, group = G_LIQ)
+eqThr     = input.float(0.1, "Equal highs / lows tolerance (x ATR)", minval = 0, step = 0.05, group = G_LIQ)
+sweepShow = input.bool(true, "Keep taken levels and mark sweeps", group = G_LIQ, tooltip = "Sweep = wick through the level and close back on the other side (stop raid / turtle soup).")
+bslCol    = input.color(#F23645, "BSL", inline = "liq", group = G_LIQ)
+sslCol    = input.color(#089981, "SSL", inline = "liq", group = G_LIQ)
+
+// 5. Premium / discount & OTE
+pdShow  = input.bool(true, "Premium / discount / equilibrium", group = G_PD, tooltip = "Built on the last impulse leg that broke structure.")
+oteShow = input.bool(true, "OTE zone (62% - 79%, 70.5% sweet spot)", group = G_PD)
+tgtShow = input.bool(false, "Targets (-0.27 / -0.62 / -1 / -2)", group = G_PD)
+premCol = input.color(color.new(#F23645, 92), "Premium", inline = "pd", group = G_PD)
+discCol = input.color(color.new(#089981, 92), "Discount", inline = "pd", group = G_PD)
+oteCol  = input.color(color.new(#FFEB3B, 80), "OTE", inline = "pd", group = G_PD)
+
+// 6. Killzones
+kzShow  = input.bool(true, "Show killzones", group = G_KZ)
+kzMaxTF = input.int(60, "Only on timeframes up to (minutes)", minval = 1, group = G_KZ)
+kzDays  = input.int(5, "Days to keep", minval = 1, maxval = 30, group = G_KZ)
+asiaOn  = input.bool(true, "", inline = "asia", group = G_KZ)
+asiaSes = input.session("2000-0000", "Asia", inline = "asia", group = G_KZ)
+asiaCol = input.color(#2962FF, "", inline = "asia", group = G_KZ)
+lonOn   = input.bool(true, "", inline = "lon", group = G_KZ)
+lonSes  = input.session("0200-0500", "London", inline = "lon", group = G_KZ)
+lonCol  = input.color(#F23645, "", inline = "lon", group = G_KZ)
+nyamOn  = input.bool(true, "", inline = "nyam", group = G_KZ)
+nyamSes = input.session("0930-1100", "NY AM", inline = "nyam", group = G_KZ)
+nyamCol = input.color(#089981, "", inline = "nyam", group = G_KZ)
+lunOn   = input.bool(false, "", inline = "lun", group = G_KZ)
+lunSes  = input.session("1200-1300", "NY Lunch", inline = "lun", group = G_KZ)
+lunCol  = input.color(#787B86, "", inline = "lun", group = G_KZ)
+nypmOn  = input.bool(true, "", inline = "nypm", group = G_KZ)
+nypmSes = input.session("1330-1600", "NY PM", inline = "nypm", group = G_KZ)
+nypmCol = input.color(#9C27B0, "", inline = "nypm", group = G_KZ)
+sbShow  = input.bool(true, "Silver Bullet (03-04, 10-11, 14-15)", inline = "sb", group = G_KZ)
+sbCol   = input.color(color.new(#B2B5BE, 88), "", inline = "sb", group = G_KZ)
+macShow = input.bool(false, "ICT macros (5m and below)", inline = "mac", group = G_KZ)
+macCol  = input.color(color.new(#FF9800, 88), "", inline = "mac", group = G_KZ)
+
+// 7. Key levels
+pdOn   = input.bool(true, "Previous day high / low (PDH / PDL)", group = G_LV)
+pwOn   = input.bool(true, "Previous week high / low (PWH / PWL)", group = G_LV)
+pmOn   = input.bool(false, "Previous month high / low (PMH / PML)", group = G_LV)
+ipdaOn = input.bool(false, "IPDA ranges (20 / 40 / 60 days)", group = G_LV)
+midOn  = input.bool(true, "Midnight open 00:00 NY (true day open)", group = G_LV)
+o830On = input.bool(false, "08:30 NY open", group = G_LV)
+woOn   = input.bool(false, "Weekly open", group = G_LV)
+lvCol  = input.color(#787B86, "Highs / lows", inline = "lv", group = G_LV)
+opCol  = input.color(#FF9800, "Opens", inline = "lv", group = G_LV)
+
+// 8. Opening gaps
+nwogOn  = input.bool(true, "New week opening gap (NWOG)", inline = "nwog", group = G_GAP)
+nwogCol = input.color(color.new(#FF5252, 85), "", inline = "nwog", group = G_GAP)
+ndogOn  = input.bool(false, "New day opening gap (NDOG)", inline = "ndog", group = G_GAP)
+ndogCol = input.color(color.new(#00BCD4, 85), "", inline = "ndog", group = G_GAP)
+gapMax  = input.int(3, "Max gaps of each type", minval = 1, maxval = 10, group = G_GAP)
+
+// 9. Displacement
+dspShow = input.bool(true, "Color displacement candles", group = G_DSP)
+dspMult = input.float(2.0, "Body size (x average body of last 20)", minval = 1, step = 0.1, group = G_DSP)
+dspBull = input.color(#00E676, "Bullish", inline = "dsp", group = G_DSP)
+dspBear = input.color(#FF1744, "Bearish", inline = "dsp", group = G_DSP)
+
+// 10. SMT divergence
+smtShow = input.bool(false, "Show SMT divergence", group = G_SMT)
+smtSym  = input.symbol("BINANCE:ETHUSDT", "Compare with", group = G_SMT, tooltip = "A correlated market: BTC vs ETH, EURUSD vs GBPUSD, NQ vs ES, XAUUSD vs XAGUSD. For DXY tick 'Inverse correlation'.")
+smtInv  = input.bool(false, "Inverse correlation (e.g. DXY)", group = G_SMT)
+smtLen  = input.int(5, "Swing length", minval = 2, maxval = 50, group = G_SMT)
+smtCol  = input.color(#FFEB3B, "Color", group = G_SMT)
+
+// 11. Dashboard
+dbShow = input.bool(true, "Show dashboard", group = G_DB)
+dbPos  = input.string("Top Right", "Position", options = ["Top Right", "Bottom Right", "Bottom Left", "Top Left"], group = G_DB)
+
+//==============================================================================
+// TYPES, COMMON VALUES, STORAGE
+//==============================================================================
+type Zone
+    box  bx
+    line ce
+    bool bull
+    bool inv
+
+type Liq
+    line  ln
+    label lb
+    float price
+    bool  eq
+
+TZ     = "America/New_York"
+TRANSP = color.new(color.white, 100)
+atr    = ta.atr(14)
+tfSec  = timeframe.in_seconds()
+zoneX  = bar_index + 3
+lvlX   = bar_index + 12
+
+var array<line>  msLines   = array.new<line>()
+var array<label> msLabels  = array.new<label>()
+var array<box>   bullOB    = array.new<box>()
+var array<box>   bearOB    = array.new<box>()
+var array<box>   bullBB    = array.new<box>()
+var array<box>   bearBB    = array.new<box>()
+var array<Zone>  fvgs      = array.new<Zone>()
+var array<Zone>  bprs      = array.new<Zone>()
+var array<Zone>  viZones   = array.new<Zone>()
+var array<Zone>  nwogs     = array.new<Zone>()
+var array<Zone>  ndogs     = array.new<Zone>()
+var array<Liq>   bslArr    = array.new<Liq>()
+var array<Liq>   sslArr    = array.new<Liq>()
+var array<Liq>   liqDone   = array.new<Liq>()
+var array<line>  smtLines  = array.new<line>()
+var array<label> smtLabels = array.new<label>()
+var array<line>  tmpLines  = array.new<line>()
+var array<label> tmpLabels = array.new<label>()
+var array<box>   tmpBoxes  = array.new<box>()
+
+//==============================================================================
+// HELPERS
+//==============================================================================
+pushBox(array<box> arr, box b, int maxN) =>
+    array.push(arr, b)
+    if array.size(arr) > maxN
+        box.delete(array.shift(arr))
+    true
+
+pushLine(array<line> arr, line l, int maxN) =>
+    array.push(arr, l)
+    if array.size(arr) > maxN
+        line.delete(array.shift(arr))
+    true
+
+pushLabel(array<label> arr, label l, int maxN) =>
+    array.push(arr, l)
+    if array.size(arr) > maxN
+        label.delete(array.shift(arr))
+    true
+
+deleteZone(Zone z) =>
+    box.delete(z.bx)
+    line.delete(z.ce)
+    true
+
+pushZone(array<Zone> arr, Zone z, int maxN) =>
+    array.push(arr, z)
+    if array.size(arr) > maxN
+        deleteZone(array.shift(arr))
+    true
+
+extendZone(Zone z) =>
+    box.set_right(z.bx, zoneX)
+    if not na(z.ce)
+        line.set_x2(z.ce, zoneX)
+    true
+
+//==============================================================================
+// 1 + 2. MARKET STRUCTURE, ORDER BLOCKS, BREAKERS
+//==============================================================================
+drawBreak(int x1, float y, bool isBull, bool isMSS) =>
+    c = isBull ? msBullCol : msBearCol
+    pushLine(msLines, line.new(x1, y, bar_index, y, color = c, style = isMSS ? line.style_solid : line.style_dashed), msMax)
+    pushLabel(msLabels, label.new(math.round((x1 + bar_index) / 2), y, isMSS ? "MSS" : "BOS", color = TRANSP, textcolor = c, style = isBull ? label.style_label_down : label.style_label_up, size = size.small), msMax)
+    true
+
+manageBreakers(array<box> arr, bool isBull) =>
+    if array.size(arr) > 0
+        for i = array.size(arr) - 1 to 0
+            b = array.get(arr, i)
+            failed = isBull ? close < box.get_bottom(b) : close > box.get_top(b)
+            if failed
+                array.remove(arr, i)
+                box.delete(b)
+            else
+                box.set_right(b, zoneX)
+    true
+
+manageOBs(array<box> arr, bool isBull, array<box> bbArr) =>
+    if array.size(arr) > 0
+        for i = array.size(arr) - 1 to 0
+            b = array.get(arr, i)
+            broken = isBull ? close < box.get_bottom(b) : close > box.get_top(b)
+            if broken
+                array.remove(arr, i)
+                if bbShow
+                    c = isBull ? bbBearCol : bbBullCol
+                    box.set_bgcolor(b, c)
+                    box.set_border_color(b, color.new(c, 40))
+                    box.set_text(b, isBull ? "Bear Breaker" : "Bull Breaker")
+                    box.set_text_color(b, color.new(c, 0))
+                    pushBox(bbArr, b, obMax)
+                    box.set_right(b, zoneX)
+                else
+                    box.delete(b)
+            else
+                box.set_right(b, zoneX)
+    true
+
+// Existing blocks are updated before new ones are created on this bar
+manageBreakers(bullBB, true)
+manageBreakers(bearBB, false)
+manageOBs(bullOB, true, bearBB)
+manageOBs(bearOB, false, bullBB)
+
+ph = ta.pivothigh(high, msLen, msLen)
+pl = ta.pivotlow(low, msLen, msLen)
+
+var float shPrice    = na
+var int   shBar      = na
+var bool  shDone     = true
+var float slPrice    = na
+var int   slBar      = na
+var bool  slDone     = true
+var int   trend      = 0
+var float legHigh    = na
+var float legLow     = na
+var int   legHighBar = na
+var int   legLowBar  = na
+
+if not na(ph)
+    shPrice := ph
+    shBar   := bar_index - msLen
+    shDone  := false
+if not na(pl)
+    slPrice := pl
+    slBar   := bar_index - msLen
+    slDone  := false
+
+upSrc     = msConfirm == "Close" ? close : high
+dnSrc     = msConfirm == "Close" ? close : low
+bullBreak = not shDone and upSrc > shPrice
+bearBreak = not slDone and dnSrc < slPrice
+bullMSS   = bullBreak and trend == -1
+bearMSS   = bearBreak and trend == 1
+bullBOS   = bullBreak and not bullMSS
+bearBOS   = bearBreak and not bearMSS
+newBullOB = false
+newBearOB = false
+
+if bullBreak
+    n = math.min(bar_index - shBar, 450)
+    float lowV = na
+    int   lowI = na
+    float obV  = na
+    int   obI  = na
+    for i = 0 to n
+        if na(lowV) or low[i] < lowV
+            lowV := low[i]
+            lowI := i
+        if i > 0 and close[i] < open[i] and (na(obV) or low[i] < obV)
+            obV := low[i]
+            obI := i
+    if na(obI) and lowI > 0
+        obI := lowI
+    if msShow
+        drawBreak(shBar, shPrice, true, bullMSS)
+    if obShow and not na(obI)
+        top = obBody ? math.max(open[obI], close[obI]) : high[obI]
+        bot = obBody ? math.min(open[obI], close[obI]) : low[obI]
+        pushBox(bullOB, box.new(bar_index - obI, top, zoneX, bot, border_color = color.new(obBullCol, 40), bgcolor = obBullCol, text = "Bull OB", text_color = color.new(obBullCol, 0), text_size = size.tiny, text_halign = text.align_right), obMax)
+        newBullOB := true
+    legLow     := lowV
+    legLowBar  := bar_index - lowI
+    legHigh    := high
+    legHighBar := bar_index
+    trend      := 1
+    shDone     := true
+
+if bearBreak
+    n = math.min(bar_index - slBar, 450)
+    float highV = na
+    int   highI = na
+    float obV   = na
+    int   obI   = na
+    for i = 0 to n
+        if na(highV) or high[i] > highV
+            highV := high[i]
+            highI := i
+        if i > 0 and close[i] > open[i] and (na(obV) or high[i] > obV)
+            obV := high[i]
+            obI := i
+    if na(obI) and highI > 0
+        obI := highI
+    if msShow
+        drawBreak(slBar, slPrice, false, bearMSS)
+    if obShow and not na(obI)
+        top = obBody ? math.max(open[obI], close[obI]) : high[obI]
+        bot = obBody ? math.min(open[obI], close[obI]) : low[obI]
+        pushBox(bearOB, box.new(bar_index - obI, top, zoneX, bot, border_color = color.new(obBearCol, 40), bgcolor = obBearCol, text = "Bear OB", text_color = color.new(obBearCol, 0), text_size = size.tiny, text_halign = text.align_right), obMax)
+        newBearOB := true
+    legHigh    := highV
+    legHighBar := bar_index - highI
+    legLow     := low
+    legLowBar  := bar_index
+    trend      := -1
+    slDone     := true
+
+// The dealing range (impulse leg) always contains the latest price
+if not na(legHigh) and high > legHigh
+    legHigh    := high
+    legHighBar := bar_index
+if not na(legLow) and low < legLow
+    legLow    := low
+    legLowBar := bar_index
+
+//==============================================================================
+// 3. FVG / IFVG / BPR / VOLUME IMBALANCE
+//==============================================================================
+if array.size(fvgs) > 0
+    for i = array.size(fvgs) - 1 to 0
+        z   = array.get(fvgs, i)
+        top = box.get_top(z.bx)
+        bot = box.get_bottom(z.bx)
+        if not z.inv
+            flip = ifvgShow and (z.bull ? close < bot : close > top)
+            lvl  = fvgMit == "Touch" ? (z.bull ? top : bot) : fvgMit == "50% (CE)" ? (top + bot) / 2 : (z.bull ? bot : top)
+            hit  = z.bull ? low <= lvl : high >= lvl
+            if flip
+                z.inv  := true
+                z.bull := not z.bull
+                box.set_bgcolor(z.bx, ifvgCol)
+                box.set_border_color(z.bx, color.new(ifvgCol, 40))
+                box.set_text(z.bx, z.bull ? "Bull IFVG" : "Bear IFVG")
+                box.set_text_color(z.bx, color.new(ifvgCol, 0))
+                if not na(z.ce)
+                    line.set_color(z.ce, color.new(ifvgCol, 30))
+                extendZone(z)
+            else if hit
+                array.remove(fvgs, i)
+                deleteZone(z)
+            else
+                extendZone(z)
+        else
+            dead = z.bull ? close < bot : close > top
+            if dead
+                array.remove(fvgs, i)
+                deleteZone(z)
+            else
+                extendZone(z)
+
+if array.size(bprs) > 0
+    for i = array.size(bprs) - 1 to 0
+        z    = array.get(bprs, i)
+        dead = z.bull ? close < box.get_bottom(z.bx) : close > box.get_top(z.bx)
+        if dead
+            array.remove(bprs, i)
+            deleteZone(z)
+        else
+            extendZone(z)
+
+if array.size(viZones) > 0
+    for i = array.size(viZones) - 1 to 0
+        z      = array.get(viZones, i)
+        filled = z.bull ? low <= box.get_bottom(z.bx) : high >= box.get_top(z.bx)
+        if filled
+            array.remove(viZones, i)
+            deleteZone(z)
+        else
+            extendZone(z)
+
+makeBPR(float top, float bot, bool isBull) =>
+    if array.size(fvgs) > 0
+        for j = 0 to array.size(fvgs) - 1
+            o = array.get(fvgs, j)
+            if not o.inv and o.bull != isBull
+                t = math.min(top, box.get_top(o.bx))
+                b = math.max(bot, box.get_bottom(o.bx))
+                if t > b
+                    bx = box.new(box.get_left(o.bx), t, zoneX, b, border_color = color.new(bprCol, 40), bgcolor = bprCol, text = "BPR", text_color = color.new(bprCol, 0), text_size = size.tiny, text_halign = text.align_right)
+                    pushZone(bprs, Zone.new(bx, na, isBull, false), fvgMax)
+    true
+
+newFVG(float top, float bot, bool isBull) =>
+    c  = isBull ? fvgBullCol : fvgBearCol
+    bx = box.new(bar_index - 2, top, zoneX, bot, border_color = fvgShow ? color.new(c, 40) : TRANSP, bgcolor = fvgShow ? c : TRANSP, text = fvgShow ? (isBull ? "Bull FVG" : "Bear FVG") : "", text_color = color.new(c, 0), text_size = size.tiny, text_halign = text.align_right)
+    ln = fvgShow and fvgCE ? line.new(bar_index - 2, (top + bot) / 2, zoneX, (top + bot) / 2, color = color.new(c, 30), style = line.style_dashed) : na
+    pushZone(fvgs, Zone.new(bx, ln, isBull, false), fvgMax)
+    true
+
+bullFVG  = low > high[2] and low - high[2] >= atr * fvgMinAtr
+bearFVG  = high < low[2] and low[2] - high >= atr * fvgMinAtr
+trackFVG = fvgShow or ifvgShow or bprShow
+
+if trackFVG and bullFVG
+    if bprShow
+        makeBPR(low, high[2], true)
+    newFVG(low, high[2], true)
+if trackFVG and bearFVG
+    if bprShow
+        makeBPR(low[2], high, false)
+    newFVG(low[2], high, false)
+
+viBull = close > open and close[1] > open[1] and open > close[1] and low <= high[1]
+viBear = close < open and close[1] < open[1] and open < close[1] and high >= low[1]
+if viShow and viBull
+    pushZone(viZones, Zone.new(box.new(bar_index - 1, open, zoneX, close[1], border_color = color.new(viCol, 30), bgcolor = viCol, text = "VI", text_color = color.new(viCol, 0), text_size = size.tiny, text_halign = text.align_right), na, true, false), fvgMax)
+if viShow and viBear
+    pushZone(viZones, Zone.new(box.new(bar_index - 1, close[1], zoneX, open, border_color = color.new(viCol, 30), bgcolor = viCol, text = "VI", text_color = color.new(viCol, 0), text_size = size.tiny, text_halign = text.align_right), na, false, false), fvgMax)
+
+//==============================================================================
+// 4. LIQUIDITY (BSL / SSL / EQH / EQL / SWEEPS)
+//==============================================================================
+manageLiq(array<Liq> arr, bool isHigh) =>
+    bool swept = false
+    if array.size(arr) > 0
+        for i = array.size(arr) - 1 to 0
+            q     = array.get(arr, i)
+            taken = isHigh ? high > q.price : low < q.price
+            if taken
+                array.remove(arr, i)
+                raid  = isHigh ? close < q.price : close > q.price
+                swept := swept or raid
+                if sweepShow
+                    c = raid ? (isHigh ? bslCol : sslCol) : color.gray
+                    line.set_x2(q.ln, bar_index)
+                    line.set_style(q.ln, line.style_dotted)
+                    line.set_color(q.ln, c)
+                    label.set_x(q.lb, bar_index)
+                    label.set_text(q.lb, (q.eq ? (isHigh ? "EQH" : "EQL") : (isHigh ? "BSL" : "SSL")) + (raid ? " sweep" : " taken"))
+                    label.set_textcolor(q.lb, c)
+                    array.push(liqDone, q)
+                    if array.size(liqDone) > liqMax * 2
+                        old = array.shift(liqDone)
+                        line.delete(old.ln)
+                        label.delete(old.lb)
+                else
+                    line.delete(q.ln)
+                    label.delete(q.lb)
+            else
+                line.set_x2(q.ln, zoneX)
+                label.set_x(q.lb, zoneX)
+    swept
+
+addLiq(array<Liq> arr, float price, int x, bool isHigh) =>
+    bool merged = false
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            q = array.get(arr, i)
+            if math.abs(q.price - price) <= atr * eqThr
+                q.eq    := true
+                q.price := isHigh ? math.max(q.price, price) : math.min(q.price, price)
+                line.set_y1(q.ln, q.price)
+                line.set_y2(q.ln, q.price)
+                line.set_width(q.ln, 2)
+                label.set_y(q.lb, q.price)
+                label.set_text(q.lb, isHigh ? "EQH" : "EQL")
+                merged := true
+                break
+    if not merged
+        c  = isHigh ? bslCol : sslCol
+        ln = line.new(x, price, zoneX, price, color = c, style = line.style_dashed)
+        lb = label.new(zoneX, price, isHigh ? "BSL" : "SSL", color = TRANSP, textcolor = c, style = label.style_label_left, size = size.tiny)
+        array.push(arr, Liq.new(ln, lb, price, false))
+        if array.size(arr) > liqMax
+            old = array.shift(arr)
+            line.delete(old.ln)
+            label.delete(old.lb)
+    merged
+
+bslSweep = manageLiq(bslArr, true)
+sslSweep = manageLiq(sslArr, false)
+
+lph = ta.pivothigh(high, liqLen, liqLen)
+lpl = ta.pivotlow(low, liqLen, liqLen)
+if liqShow and not na(lph)
+    addLiq(bslArr, lph, bar_index - liqLen, true)
+if liqShow and not na(lpl)
+    addLiq(sslArr, lpl, bar_index - liqLen, false)
+
+//==============================================================================
+// 7. KEY LEVELS DATA (drawn on the last bar)
+//==============================================================================
+[pdh, pdl, h20, l20, h40, l40, h60, l60] = request.security(syminfo.tickerid, "D", [high[1], low[1], ta.highest(high, 20)[1], ta.lowest(low, 20)[1], ta.highest(high, 40)[1], ta.lowest(low, 40)[1], ta.highest(high, 60)[1], ta.lowest(low, 60)[1]], lookahead = barmerge.lookahead_on)
+[pwh, pwl, wkOp] = request.security(syminfo.tickerid, "W", [high[1], low[1], open], lookahead = barmerge.lookahead_on)
+[pmh, pml]       = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+
+newDay   = timeframe.change("D")
+newWeek  = timeframe.change("W")
+newMonth = timeframe.change("M")
+var int dayStart   = na
+var int weekStart  = na
+var int monthStart = na
+if newDay
+    dayStart := bar_index
+if newWeek
+    weekStart := bar_index
+if newMonth
+    monthStart := bar_index
+
+nyDay    = dayofmonth(time, TZ)
+nyMins   = hour(time, TZ) * 60 + minute(time, TZ)
+newNYDay = nyDay != nyDay[1]
+var float midOpen = na
+var int   midBar  = na
+var float o830    = na
+var int   o830Bar = na
+if newNYDay
+    midOpen := open
+    midBar  := bar_index
+if nyMins >= 510 and (nyMins[1] < 510 or newNYDay)
+    o830    := open
+    o830Bar := bar_index
+
+//==============================================================================
+// 8. OPENING GAPS (NWOG / NDOG)
+//==============================================================================
+makeGap(array<Zone> arr, string txt, color c, float prevClose) =>
+    gTop = math.max(open, prevClose)
+    gBot = math.min(open, prevClose)
+    if gTop - gBot > syminfo.mintick
+        bx = box.new(bar_index - 1, gTop, zoneX, gBot, border_color = color.new(c, 40), bgcolor = c, text = txt, text_color = color.new(c, 0), text_size = size.tiny, text_halign = text.align_right)
+        ce = line.new(bar_index - 1, (gTop + gBot) / 2, zoneX, (gTop + gBot) / 2, color = color.new(c, 40), style = line.style_dotted)
+        pushZone(arr, Zone.new(bx, ce, open > prevClose, false), gapMax)
+    true
+
+extendAll(array<Zone> arr) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            extendZone(array.get(arr, i))
+    true
+
+extendAll(nwogs)
+extendAll(ndogs)
+prevClose = close[1]
+if nwogOn and newWeek and tfSec < 604800 and bar_index > 0
+    makeGap(nwogs, "NWOG", nwogCol, prevClose)
+if ndogOn and newDay and tfSec < 86400 and bar_index > 0
+    makeGap(ndogs, "NDOG", ndogCol, prevClose)
+
+//==============================================================================
+// 6. KILLZONES / SILVER BULLET / MACROS (New York time)
+//==============================================================================
+inSess(s) => not na(time(timeframe.period, s, TZ))
+
+kzOK   = timeframe.isintraday and tfSec <= kzMaxTF * 60
+inAsia = inSess(asiaSes)
+inLon  = inSess(lonSes)
+inNyam = inSess(nyamSes)
+inLun  = inSess(lunSes)
+inNypm = inSess(nypmSes)
+inSB   = inSess("0300-0400") or inSess("1000-1100") or inSess("1400-1500")
+inMac  = inSess("0233-0300") or inSess("0403-0430") or inSess("0850-0910") or inSess("0950-1010") or inSess("1050-1110") or inSess("1150-1210") or inSess("1310-1340") or inSess("1515-1545")
+
+killzone(active, show, txt, c) =>
+    var box  bx    = na
+    var bool wasIn = false
+    var array<box> hist = array.new<box>()
+    if show and active and not wasIn
+        bx := box.new(bar_index, high, bar_index, low, border_color = color.new(c, 50), bgcolor = color.new(c, 90), text = txt, text_color = color.new(c, 20), text_size = size.small, text_halign = text.align_left, text_valign = text.align_top)
+        array.push(hist, bx)
+        if array.size(hist) > kzDays
+            box.delete(array.shift(hist))
+    else if show and active
+        box.set_top(bx, math.max(box.get_top(bx), high))
+        box.set_bottom(bx, math.min(box.get_bottom(bx), low))
+        box.set_right(bx, bar_index)
+    wasIn := active
+    active
+
+kzOn = kzShow and kzOK
+killzone(inAsia, kzOn and asiaOn, "Asia", asiaCol)
+killzone(inLon, kzOn and lonOn, "London", lonCol)
+killzone(inNyam, kzOn and nyamOn, "NY AM", nyamCol)
+killzone(inLun, kzOn and lunOn, "NY Lunch", lunCol)
+killzone(inNypm, kzOn and nypmOn, "NY PM", nypmCol)
+bgcolor(sbShow and kzOK and inSB ? sbCol : na, title = "Silver Bullet")
+bgcolor(macShow and tfSec <= 300 and inMac ? macCol : na, title = "ICT Macros")
+
+//==============================================================================
+// 9. DISPLACEMENT
+//==============================================================================
+body    = math.abs(close - open)
+avgBody = ta.sma(body, 20)
+isDisp  = body > avgBody * dspMult
+barcolor(dspShow and isDisp ? (close > open ? dspBull : dspBear) : na, title = "Displacement")
+
+//==============================================================================
+// 10. SMT DIVERGENCE
+//==============================================================================
+smtTicker      = smtShow ? smtSym : syminfo.tickerid
+[oHraw, oLraw] = request.security(smtTicker, timeframe.period, [high, low])
+oH  = smtInv ? -oLraw : oHraw
+oL  = smtInv ? -oHraw : oLraw
+oHH = ta.highest(oH, smtLen * 2 + 1)
+oLL = ta.lowest(oL, smtLen * 2 + 1)
+sph = ta.pivothigh(high, smtLen, smtLen)
+spl = ta.pivotlow(low, smtLen, smtLen)
+
+var float smtH  = na
+var float smtOH = na
+var int   smtHb = na
+var float smtL  = na
+var float smtOL = na
+var int   smtLb = na
+smtBear = false
+smtBull = false
+
+if not na(sph)
+    x = bar_index - smtLen
+    if smtShow and not na(smtH) and not na(smtOH) and not na(oHH)
+        if (sph > smtH) != (oHH > smtOH)
+            smtBear := true
+            pushLine(smtLines, line.new(smtHb, smtH, x, sph, color = smtCol, width = 2), 10)
+            pushLabel(smtLabels, label.new(x, sph, "SMT", color = TRANSP, textcolor = smtCol, style = label.style_label_down, size = size.small), 10)
+    smtH  := sph
+    smtOH := oHH
+    smtHb := x
+if not na(spl)
+    x = bar_index - smtLen
+    if smtShow and not na(smtL) and not na(smtOL) and not na(oLL)
+        if (spl < smtL) != (oLL < smtOL)
+            smtBull := true
+            pushLine(smtLines, line.new(smtLb, smtL, x, spl, color = smtCol, width = 2), 10)
+            pushLabel(smtLabels, label.new(x, spl, "SMT", color = TRANSP, textcolor = smtCol, style = label.style_label_up, size = size.small), 10)
+    smtL  := spl
+    smtOL := oLL
+    smtLb := x
+
+//==============================================================================
+// 5 + 7. PREMIUM / DISCOUNT, OTE, TARGETS, KEY LEVELS (redrawn on the last bar)
+//==============================================================================
+clearTmp() =>
+    for ln in tmpLines
+        line.delete(ln)
+    for lb in tmpLabels
+        label.delete(lb)
+    for bx in tmpBoxes
+        box.delete(bx)
+    array.clear(tmpLines)
+    array.clear(tmpLabels)
+    array.clear(tmpBoxes)
+    true
+
+drawLevel(x1, y, c, txt, st) =>
+    if not na(x1) and not na(y)
+        x = math.max(x1, bar_index - 4999)
+        array.push(tmpLines, line.new(x, y, lvlX, y, color = c, style = st))
+        array.push(tmpLabels, label.new(lvlX, y, txt, color = TRANSP, textcolor = c, style = label.style_label_left, size = size.small))
+    true
+
+if barstate.islast
+    clearTmp()
+    rng = legHigh - legLow
+    if not na(rng) and rng > 0
+        eq = legLow + rng / 2
+        x1 = math.max(math.min(legHighBar, legLowBar), bar_index - 4999)
+        if pdShow
+            array.push(tmpBoxes, box.new(x1, legHigh, lvlX, eq, border_color = TRANSP, bgcolor = premCol, text = "Premium", text_color = color.new(premCol, 20), text_size = size.small, text_halign = text.align_right, text_valign = text.align_top))
+            array.push(tmpBoxes, box.new(x1, eq, lvlX, legLow, border_color = TRANSP, bgcolor = discCol, text = "Discount", text_color = color.new(discCol, 20), text_size = size.small, text_halign = text.align_right, text_valign = text.align_bottom))
+            drawLevel(x1, eq, color.gray, "Equilibrium 50%", line.style_dashed)
+        if oteShow and trend != 0
+            up   = trend == 1
+            ox   = math.max(up ? legHighBar : legLowBar, bar_index - 4999)
+            o62  = up ? legHigh - rng * 0.62 : legLow + rng * 0.62
+            o705 = up ? legHigh - rng * 0.705 : legLow + rng * 0.705
+            o79  = up ? legHigh - rng * 0.79 : legLow + rng * 0.79
+            array.push(tmpBoxes, box.new(ox, math.max(o62, o79), lvlX, math.min(o62, o79), border_color = color.new(oteCol, 50), bgcolor = oteCol, text = up ? "OTE Buy" : "OTE Sell", text_color = color.new(oteCol, 0), text_size = size.tiny, text_halign = text.align_left))
+            drawLevel(ox, o705, color.new(oteCol, 0), "70.5%", line.style_dotted)
+        if tgtShow and trend != 0
+            up2  = trend == 1
+            base = up2 ? legHigh : legLow
+            sgn  = up2 ? 1.0 : -1.0
+            tx   = up2 ? legHighBar : legLowBar
+            drawLevel(tx, base + sgn * rng * 0.27, color.gray, "-0.27", line.style_dotted)
+            drawLevel(tx, base + sgn * rng * 0.62, color.gray, "-0.62", line.style_dotted)
+            drawLevel(tx, base + sgn * rng, color.gray, "-1 STD", line.style_dotted)
+            drawLevel(tx, base + sgn * rng * 2, color.gray, "-2 STD", line.style_dotted)
+    if pdOn and tfSec < 86400
+        drawLevel(dayStart, pdh, lvCol, "PDH", line.style_solid)
+        drawLevel(dayStart, pdl, lvCol, "PDL", line.style_solid)
+    if pwOn and tfSec < 604800
+        drawLevel(weekStart, pwh, lvCol, "PWH", line.style_solid)
+        drawLevel(weekStart, pwl, lvCol, "PWL", line.style_solid)
+    if pmOn and tfSec < timeframe.in_seconds("1M")
+        drawLevel(monthStart, pmh, lvCol, "PMH", line.style_solid)
+        drawLevel(monthStart, pml, lvCol, "PML", line.style_solid)
+    if ipdaOn and tfSec <= 86400
+        drawLevel(dayStart, h20, lvCol, "IPDA 20D High", line.style_dotted)
+        drawLevel(dayStart, l20, lvCol, "IPDA 20D Low", line.style_dotted)
+        drawLevel(dayStart, h40, lvCol, "IPDA 40D High", line.style_dotted)
+        drawLevel(dayStart, l40, lvCol, "IPDA 40D Low", line.style_dotted)
+        drawLevel(dayStart, h60, lvCol, "IPDA 60D High", line.style_dotted)
+        drawLevel(dayStart, l60, lvCol, "IPDA 60D Low", line.style_dotted)
+    if midOn and tfSec <= 3600
+        drawLevel(midBar, midOpen, opCol, "Midnight Open", line.style_dashed)
+    if o830On and tfSec <= 1800
+        drawLevel(o830Bar, o830, opCol, "08:30 Open", line.style_dashed)
+    if woOn and tfSec < 604800
+        drawLevel(weekStart, wkOp, opCol, "Weekly Open", line.style_dashed)
+
+//==============================================================================
+// 11. DASHBOARD
+//==============================================================================
+dbPosition = switch dbPos
+    "Top Right"    => position.top_right
+    "Bottom Right" => position.bottom_right
+    "Bottom Left"  => position.bottom_left
+    => position.top_left
+var table db = table.new(dbPosition, 2, 5, bgcolor = color.new(color.gray, 85), frame_color = color.new(color.gray, 60), frame_width = 1)
+
+if barstate.islast and dbShow
+    rngD    = legHigh - legLow
+    pct     = rngD > 0 ? (close - legLow) / rngD * 100 : na
+    zoneTxt = na(pct) ? "-" : (pct >= 50 ? "Premium " : "Discount ") + str.tostring(pct, "#") + "%"
+    kzTxt   = not timeframe.isintraday ? "-" : inAsia ? "Asia" : inLon ? "London" : inNyam ? "NY AM" : inLun ? "NY Lunch" : inNypm ? "NY PM" : "Outside killzones"
+    if inSB and timeframe.isintraday
+        kzTxt := kzTxt + " + Silver Bullet"
+    moTxt = na(midOpen) or tfSec > 3600 ? "-" : close > midOpen ? "Above" : "Below"
+    fg    = chart.fg_color
+    table.cell(db, 0, 0, "ICT Toolkit", text_color = fg, text_size = size.small)
+    table.cell(db, 1, 0, syminfo.ticker + " " + timeframe.period, text_color = fg, text_size = size.small)
+    table.cell(db, 0, 1, "Structure", text_color = fg, text_size = size.small, text_halign = text.align_left)
+    table.cell(db, 1, 1, trend == 1 ? "Bullish" : trend == -1 ? "Bearish" : "-", text_color = trend == 1 ? msBullCol : trend == -1 ? msBearCol : fg, text_size = size.small)
+    table.cell(db, 0, 2, "Price zone", text_color = fg, text_size = size.small, text_halign = text.align_left)
+    table.cell(db, 1, 2, zoneTxt, text_color = na(pct) ? fg : pct >= 50 ? msBearCol : msBullCol, text_size = size.small)
+    table.cell(db, 0, 3, "Session (NY)", text_color = fg, text_size = size.small, text_halign = text.align_left)
+    table.cell(db, 1, 3, kzTxt, text_color = fg, text_size = size.small)
+    table.cell(db, 0, 4, "vs Midnight Open", text_color = fg, text_size = size.small, text_halign = text.align_left)
+    table.cell(db, 1, 4, moTxt, text_color = moTxt == "Above" ? msBullCol : moTxt == "Below" ? msBearCol : fg, text_size = size.small)
+
+//==============================================================================
+// ALERTS
+//==============================================================================
+alertcondition(bullMSS, "Bullish MSS", "ICT: bullish market structure shift on {{ticker}} ({{interval}})")
+alertcondition(bearMSS, "Bearish MSS", "ICT: bearish market structure shift on {{ticker}} ({{interval}})")
+alertcondition(bullBOS, "Bullish BOS", "ICT: bullish break of structure on {{ticker}} ({{interval}})")
+alertcondition(bearBOS, "Bearish BOS", "ICT: bearish break of structure on {{ticker}} ({{interval}})")
+alertcondition(newBullOB, "New bullish order block", "ICT: new bullish order block on {{ticker}} ({{interval}})")
+alertcondition(newBearOB, "New bearish order block", "ICT: new bearish order block on {{ticker}} ({{interval}})")
+alertcondition(bullFVG, "New bullish FVG", "ICT: new bullish fair value gap on {{ticker}} ({{interval}})")
+alertcondition(bearFVG, "New bearish FVG", "ICT: new bearish fair value gap on {{ticker}} ({{interval}})")
+alertcondition(bslSweep, "Buy-side liquidity sweep", "ICT: buy-side liquidity swept on {{ticker}} ({{interval}})")
+alertcondition(sslSweep, "Sell-side liquidity sweep", "ICT: sell-side liquidity swept on {{ticker}} ({{interval}})")
+alertcondition(smtBull, "Bullish SMT divergence", "ICT: bullish SMT divergence on {{ticker}} ({{interval}})")
+alertcondition(smtBear, "Bearish SMT divergence", "ICT: bearish SMT divergence on {{ticker}} ({{interval}})")
