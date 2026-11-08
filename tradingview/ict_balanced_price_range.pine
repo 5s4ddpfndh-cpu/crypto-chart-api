@@ -1,0 +1,67 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT Balanced Price Range (BPR): the overlap of a bullish FVG and a bearish FVG
+//@version=5
+indicator("ICT Balanced Price Range (BPR)", "ICT BPR", overlay = true, max_boxes_count = 500)
+
+minATR   = input.float(0.0, "Min FVG size (x ATR)", minval = 0, step = 0.05)
+lookback = input.int(20, "Recent FVGs to compare", minval = 2, maxval = 100, tooltip = "Each new FVG is compared with this many recent FVGs of the opposite direction, filled or not.")
+maxShown = input.int(5, "Max BPRs shown", minval = 1, maxval = 50)
+bullCol  = input.color(color.new(#089981, 75), "Bullish BPR", inline = "c")
+bearCol  = input.color(color.new(#F23645, 75), "Bearish BPR", inline = "c")
+
+type Rec
+    float top
+    float bot
+    int   left
+    bool  bull
+
+type Zone
+    box  bx
+    bool bull
+
+atr   = ta.atr(14)
+zoneX = bar_index + 3
+var array<Rec>  recent = array.new<Rec>()
+var array<Zone> bprs   = array.new<Zone>()
+
+// A BPR ends when price closes through it
+if array.size(bprs) > 0
+    for i = array.size(bprs) - 1 to 0
+        z    = array.get(bprs, i)
+        dead = z.bull ? close < box.get_bottom(z.bx) : close > box.get_top(z.bx)
+        if dead
+            array.remove(bprs, i)
+            box.delete(z.bx)
+        else
+            box.set_right(z.bx, zoneX)
+
+checkBPR(float top, float bot, bool isBull) =>
+    bool found = false
+    if array.size(recent) > 0
+        for j = array.size(recent) - 1 to 0
+            r = array.get(recent, j)
+            if r.bull != isBull
+                t = math.min(top, r.top)
+                b = math.max(bot, r.bot)
+                if t > b
+                    c = isBull ? bullCol : bearCol
+                    array.push(bprs, Zone.new(box.new(r.left, t, zoneX, b, border_color = color.new(c, 40), bgcolor = c, text = isBull ? "Bull BPR" : "Bear BPR", text_color = color.new(c, 0), text_size = size.tiny, text_halign = text.align_right), isBull))
+                    if array.size(bprs) > maxShown
+                        old = array.shift(bprs)
+                        box.delete(old.bx)
+                    array.remove(recent, j)
+                    found := true
+    array.push(recent, Rec.new(top, bot, bar_index - 2, isBull))
+    if array.size(recent) > lookback
+        array.shift(recent)
+    found
+
+newBullBPR = false
+newBearBPR = false
+if low > high[2] and low - high[2] >= atr * minATR
+    newBullBPR := checkBPR(low, high[2], true)
+if high < low[2] and low[2] - high >= atr * minATR
+    newBearBPR := checkBPR(low[2], high, false)
+
+alertcondition(newBullBPR, "New bullish BPR", "ICT: new bullish balanced price range on {{ticker}} ({{interval}})")
+alertcondition(newBearBPR, "New bearish BPR", "ICT: new bearish balanced price range on {{ticker}} ({{interval}})")

@@ -1,0 +1,64 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT SMT Divergence: one market makes a new high / low while a correlated market fails to
+//@version=5
+indicator("ICT SMT Divergence", "ICT SMT", overlay = true, max_lines_count = 200, max_labels_count = 200)
+
+otherSym = input.symbol("BINANCE:ETHUSDT", "Compare with", tooltip = "A correlated market: BTC vs ETH, EURUSD vs GBPUSD, NQ vs ES, XAUUSD vs XAGUSD. For DXY tick 'Inverse correlation'.")
+inverse  = input.bool(false, "Inverse correlation (e.g. DXY)")
+swingLen = input.int(5, "Swing length", minval = 2, maxval = 50)
+maxShown = input.int(10, "Max shown", minval = 1, maxval = 100)
+bullCol  = input.color(#089981, "Bullish SMT", inline = "c")
+bearCol  = input.color(#F23645, "Bearish SMT", inline = "c")
+
+TRANSP = color.new(color.white, 100)
+[hRaw, lRaw] = request.security(otherSym, timeframe.period, [high, low])
+oH  = inverse ? -lRaw : hRaw
+oL  = inverse ? -hRaw : lRaw
+oHH = ta.highest(oH, swingLen * 2 + 1)
+oLL = ta.lowest(oL, swingLen * 2 + 1)
+ph  = ta.pivothigh(high, swingLen, swingLen)
+pl  = ta.pivotlow(low, swingLen, swingLen)
+
+var array<line>  smtLines  = array.new<line>()
+var array<label> smtLabels = array.new<label>()
+
+drawSMT(int x1, float y1, int x2, float y2, bool isBull) =>
+    c = isBull ? bullCol : bearCol
+    array.push(smtLines, line.new(x1, y1, x2, y2, color = c, width = 2))
+    array.push(smtLabels, label.new(x2, y2, isBull ? "Bull SMT" : "Bear SMT", color = TRANSP, textcolor = c, style = isBull ? label.style_label_up : label.style_label_down, size = size.small))
+    if array.size(smtLines) > maxShown
+        line.delete(array.shift(smtLines))
+        label.delete(array.shift(smtLabels))
+    true
+
+var float pH  = na
+var float pOH = na
+var int   pHb = na
+var float pL  = na
+var float pOL = na
+var int   pLb = na
+smtBear = false
+smtBull = false
+
+// At swing highs: one market makes a higher high, the other does not -> bearish SMT
+if not na(ph)
+    x = bar_index - swingLen
+    if not na(pH) and not na(pOH) and not na(oHH) and (ph > pH) != (oHH > pOH)
+        smtBear := true
+        drawSMT(pHb, pH, x, ph, false)
+    pH  := ph
+    pOH := oHH
+    pHb := x
+
+// At swing lows: one market makes a lower low, the other does not -> bullish SMT
+if not na(pl)
+    x = bar_index - swingLen
+    if not na(pL) and not na(pOL) and not na(oLL) and (pl < pL) != (oLL < pOL)
+        smtBull := true
+        drawSMT(pLb, pL, x, pl, true)
+    pL  := pl
+    pOL := oLL
+    pLb := x
+
+alertcondition(smtBull, "Bullish SMT divergence", "ICT: bullish SMT divergence on {{ticker}} ({{interval}})")
+alertcondition(smtBear, "Bearish SMT divergence", "ICT: bearish SMT divergence on {{ticker}} ({{interval}})")

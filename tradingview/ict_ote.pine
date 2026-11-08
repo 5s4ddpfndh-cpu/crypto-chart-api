@@ -1,0 +1,119 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT OTE (Optimal Trade Entry): 62% - 79% retracement of the last impulse leg, 70.5% sweet spot, with targets
+//@version=5
+indicator("ICT OTE (Optimal Trade Entry)", "ICT OTE", overlay = true, max_boxes_count = 50, max_lines_count = 50, max_labels_count = 50, max_bars_back = 500)
+
+swingLen  = input.int(5, "Swing length", minval = 2, maxval = 50, tooltip = "OTE is drawn on the last impulse leg that broke structure: a buy zone in a bullish leg, a sell zone in a bearish leg.")
+confirmBy = input.string("Close", "Break confirmation", options = ["Close", "Wick"])
+showFib   = input.bool(true, "Show leg levels (0 / 0.5 / 1)")
+showTgt   = input.bool(true, "Show targets (-0.27 / -0.62 / -1 / -2)")
+oteCol    = input.color(color.new(#FFEB3B, 80), "OTE zone", inline = "c")
+lvlCol    = input.color(#787B86, "Levels", inline = "c")
+
+TRANSP = color.new(color.white, 100)
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+
+var float shPrice    = na
+var int   shBar      = na
+var bool  shDone     = true
+var float slPrice    = na
+var int   slBar      = na
+var bool  slDone     = true
+var int   trend      = 0
+var float legHigh    = na
+var float legLow     = na
+var int   legHighBar = na
+var int   legLowBar  = na
+
+if not na(ph)
+    shPrice := ph
+    shBar   := bar_index - swingLen
+    shDone  := false
+if not na(pl)
+    slPrice := pl
+    slBar   := bar_index - swingLen
+    slDone  := false
+
+upSrc = confirmBy == "Close" ? close : high
+dnSrc = confirmBy == "Close" ? close : low
+
+if not shDone and upSrc > shPrice
+    shDone := true
+    n = math.min(bar_index - shBar, 450)
+    float v = na
+    int   k = na
+    for i = 0 to n
+        if na(v) or low[i] < v
+            v := low[i]
+            k := i
+    legLow     := v
+    legLowBar  := bar_index - k
+    legHigh    := high
+    legHighBar := bar_index
+    trend      := 1
+
+if not slDone and dnSrc < slPrice
+    slDone := true
+    n = math.min(bar_index - slBar, 450)
+    float v = na
+    int   k = na
+    for i = 0 to n
+        if na(v) or high[i] > v
+            v := high[i]
+            k := i
+    legHigh    := v
+    legHighBar := bar_index - k
+    legLow     := low
+    legLowBar  := bar_index
+    trend      := -1
+
+if not na(legHigh) and high > legHigh
+    legHigh    := high
+    legHighBar := bar_index
+if not na(legLow) and low < legLow
+    legLow    := low
+    legLowBar := bar_index
+
+rngNow  = legHigh - legLow
+oteTop  = trend == 1 ? legHigh - rngNow * 0.62 : legLow + rngNow * 0.79
+oteBot  = trend == 1 ? legHigh - rngNow * 0.79 : legLow + rngNow * 0.62
+inOTE   = trend != 0 and rngNow > 0 and low <= oteTop and high >= oteBot
+
+var array<line>  tmpLines  = array.new<line>()
+var array<label> tmpLabels = array.new<label>()
+var box          oteBx     = na
+
+drawLevel(x1, y, c, txt, st) =>
+    array.push(tmpLines, line.new(x1, y, bar_index + 10, y, color = c, style = st))
+    array.push(tmpLabels, label.new(bar_index + 10, y, txt, color = TRANSP, textcolor = c, style = label.style_label_left, size = size.small))
+    true
+
+if barstate.islast
+    for ln in tmpLines
+        line.delete(ln)
+    for lb in tmpLabels
+        label.delete(lb)
+    array.clear(tmpLines)
+    array.clear(tmpLabels)
+    box.delete(oteBx)
+    if trend != 0 and not na(rngNow) and rngNow > 0
+        up   = trend == 1
+        xEnd = math.max(up ? legHighBar : legLowBar, bar_index - 4999)
+        xBeg = math.max(up ? legLowBar : legHighBar, bar_index - 4999)
+        o705 = up ? legHigh - rngNow * 0.705 : legLow + rngNow * 0.705
+        oteBx := box.new(xEnd, oteTop, bar_index + 10, oteBot, border_color = color.new(oteCol, 50), bgcolor = oteCol, text = up ? "OTE Buy 62-79%" : "OTE Sell 62-79%", text_color = color.new(oteCol, 0), text_size = size.small, text_halign = text.align_left)
+        drawLevel(xEnd, o705, color.new(oteCol, 0), "70.5%", line.style_dotted)
+        if showFib
+            drawLevel(xBeg, up ? legLow : legHigh, lvlCol, "1", line.style_solid)
+            drawLevel(xEnd, up ? legHigh : legLow, lvlCol, "0", line.style_solid)
+            drawLevel(xBeg, legLow + rngNow / 2, lvlCol, "0.5", line.style_dashed)
+        if showTgt
+            base = up ? legHigh : legLow
+            sgn  = up ? 1.0 : -1.0
+            drawLevel(xEnd, base + sgn * rngNow * 0.27, lvlCol, "-0.27", line.style_dotted)
+            drawLevel(xEnd, base + sgn * rngNow * 0.62, lvlCol, "-0.62", line.style_dotted)
+            drawLevel(xEnd, base + sgn * rngNow, lvlCol, "-1", line.style_dotted)
+            drawLevel(xEnd, base + sgn * rngNow * 2, lvlCol, "-2", line.style_dotted)
+
+alertcondition(inOTE and not inOTE[1], "Price entered OTE", "ICT: price entered the OTE zone on {{ticker}} ({{interval}})")

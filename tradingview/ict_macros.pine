@@ -1,0 +1,40 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT Macros: short algorithmic price-delivery windows (New York time)
+//@version=5
+indicator("ICT Macros", "ICT Macros", overlay = true, max_boxes_count = 500)
+
+maxTF    = input.int(5, "Only on timeframes up to (minutes)", minval = 1)
+keepDays = input.int(3, "Days to keep", minval = 1, maxval = 30)
+col      = input.color(#FF9800, "Color")
+
+TZ    = "America/New_York"
+macOK = timeframe.isintraday and timeframe.in_seconds() <= maxTF * 60
+
+macroBox(sess, txt) =>
+    active = macOK and not na(time(timeframe.period, sess, TZ))
+    var box  bx    = na
+    var bool wasIn = false
+    var array<box> boxes = array.new<box>()
+    if active and not wasIn
+        bx := box.new(bar_index, high, bar_index, low, border_color = color.new(col, 40), bgcolor = color.new(col, 85), text = txt, text_color = color.new(col, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_top)
+        array.push(boxes, bx)
+        if array.size(boxes) > keepDays
+            box.delete(array.shift(boxes))
+    else if active
+        box.set_top(bx, math.max(box.get_top(bx), high))
+        box.set_bottom(bx, math.min(box.get_bottom(bx), low))
+        box.set_right(bx, bar_index)
+    wasIn := active
+    active
+
+m1 = macroBox("0233-0300", "02:33")
+m2 = macroBox("0403-0430", "04:03")
+m3 = macroBox("0850-0910", "08:50")
+m4 = macroBox("0950-1010", "09:50")
+m5 = macroBox("1050-1110", "10:50")
+m6 = macroBox("1150-1210", "11:50")
+m7 = macroBox("1310-1340", "13:10")
+m8 = macroBox("1515-1545", "15:15")
+anyMacro = m1 or m2 or m3 or m4 or m5 or m6 or m7 or m8
+
+alertcondition(anyMacro and not anyMacro[1], "ICT macro start", "ICT: a macro window started on {{ticker}}")

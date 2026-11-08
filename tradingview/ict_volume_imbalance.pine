@@ -1,0 +1,44 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT Volume Imbalance: two candles whose bodies do not overlap while their wicks do
+//@version=5
+indicator("ICT Volume Imbalance", "ICT VI", overlay = true, max_boxes_count = 500)
+
+maxShown = input.int(10, "Max shown", minval = 1, maxval = 100)
+bullCol  = input.color(color.new(#089981, 70), "Bullish VI", inline = "c")
+bearCol  = input.color(color.new(#F23645, 70), "Bearish VI", inline = "c")
+
+type Zone
+    box  bx
+    bool bull
+
+zoneX = bar_index + 3
+var array<Zone> vis = array.new<Zone>()
+
+// An imbalance ends when price trades through it
+if array.size(vis) > 0
+    for i = array.size(vis) - 1 to 0
+        z      = array.get(vis, i)
+        filled = z.bull ? low <= box.get_bottom(z.bx) : high >= box.get_top(z.bx)
+        if filled
+            array.remove(vis, i)
+            box.delete(z.bx)
+        else
+            box.set_right(z.bx, zoneX)
+
+addVI(float top, float bot, bool isBull) =>
+    c = isBull ? bullCol : bearCol
+    array.push(vis, Zone.new(box.new(bar_index - 1, top, zoneX, bot, border_color = color.new(c, 30), bgcolor = c, text = "VI", text_color = color.new(c, 0), text_size = size.tiny, text_halign = text.align_right), isBull))
+    if array.size(vis) > maxShown
+        old = array.shift(vis)
+        box.delete(old.bx)
+    true
+
+viBull = close > open and close[1] > open[1] and open > close[1] and low <= high[1]
+viBear = close < open and close[1] < open[1] and open < close[1] and high >= low[1]
+if viBull
+    addVI(open, close[1], true)
+if viBear
+    addVI(close[1], open, false)
+
+alertcondition(viBull, "Bullish volume imbalance", "ICT: bullish volume imbalance on {{ticker}} ({{interval}})")
+alertcondition(viBear, "Bearish volume imbalance", "ICT: bearish volume imbalance on {{ticker}} ({{interval}})")

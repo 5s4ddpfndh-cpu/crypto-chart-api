@@ -1,0 +1,72 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT Killzones (New York time) with session high / low liquidity levels
+//@version=5
+indicator("ICT Killzones", "ICT Killzones", overlay = true, max_boxes_count = 500, max_lines_count = 500)
+
+maxTF     = input.int(60, "Only on timeframes up to (minutes)", minval = 1)
+keepDays  = input.int(5, "Days to keep", minval = 1, maxval = 50)
+extLevels = input.bool(true, "Extend session high / low until taken", tooltip = "Session highs and lows are liquidity, for example the Asia range raided during London.")
+asiaOn    = input.bool(true, "", inline = "asia")
+asiaSes   = input.session("2000-0000", "Asia", inline = "asia")
+asiaCol   = input.color(#2962FF, "", inline = "asia")
+lonOn     = input.bool(true, "", inline = "lon")
+lonSes    = input.session("0200-0500", "London", inline = "lon")
+lonCol    = input.color(#F23645, "", inline = "lon")
+nyamOn    = input.bool(true, "", inline = "nyam")
+nyamSes   = input.session("0930-1100", "NY AM", inline = "nyam")
+nyamCol   = input.color(#089981, "", inline = "nyam")
+lunOn     = input.bool(true, "", inline = "lun")
+lunSes    = input.session("1200-1300", "NY Lunch", inline = "lun")
+lunCol    = input.color(#787B86, "", inline = "lun")
+nypmOn    = input.bool(true, "", inline = "nypm")
+nypmSes   = input.session("1330-1600", "NY PM", inline = "nypm")
+nypmCol   = input.color(#9C27B0, "", inline = "nypm")
+
+TZ   = "America/New_York"
+kzOK = timeframe.isintraday and timeframe.in_seconds() <= maxTF * 60
+
+killzone(sess, show, txt, c) =>
+    active = not na(time(timeframe.period, sess, TZ))
+    var box  bx    = na
+    var bool wasIn = false
+    var array<box>  boxes = array.new<box>()
+    var array<line> live  = array.new<line>()
+    var array<line> done  = array.new<line>()
+    if show and active and not wasIn
+        bx := box.new(bar_index, high, bar_index, low, border_color = color.new(c, 50), bgcolor = color.new(c, 90), text = txt, text_color = color.new(c, 20), text_size = size.small, text_halign = text.align_left, text_valign = text.align_top)
+        array.push(boxes, bx)
+        if array.size(boxes) > keepDays
+            box.delete(array.shift(boxes))
+    else if show and active
+        box.set_top(bx, math.max(box.get_top(bx), high))
+        box.set_bottom(bx, math.min(box.get_bottom(bx), low))
+        box.set_right(bx, bar_index)
+    // When the session closes, its high and low are extended until price trades through them
+    if show and extLevels and wasIn and not active
+        array.push(live, line.new(box.get_right(bx), box.get_top(bx), bar_index, box.get_top(bx), color = color.new(c, 30), style = line.style_dotted))
+        array.push(live, line.new(box.get_right(bx), box.get_bottom(bx), bar_index, box.get_bottom(bx), color = color.new(c, 30), style = line.style_dotted))
+        while array.size(live) > keepDays * 2
+            line.delete(array.shift(live))
+    if array.size(live) > 0
+        for i = array.size(live) - 1 to 0
+            l = array.get(live, i)
+            y = line.get_y1(l)
+            line.set_x2(l, bar_index)
+            if high >= y and low <= y
+                array.remove(live, i)
+                array.push(done, l)
+                if array.size(done) > keepDays * 2
+                    line.delete(array.shift(done))
+    wasIn := active
+    active
+
+inAsia = killzone(asiaSes, kzOK and asiaOn, "Asia", asiaCol)
+inLon  = killzone(lonSes, kzOK and lonOn, "London", lonCol)
+inNyam = killzone(nyamSes, kzOK and nyamOn, "NY AM", nyamCol)
+inLun  = killzone(lunSes, kzOK and lunOn, "NY Lunch", lunCol)
+inNypm = killzone(nypmSes, kzOK and nypmOn, "NY PM", nypmCol)
+
+alertcondition(inAsia and not inAsia[1], "Asia killzone start", "ICT: Asia killzone started on {{ticker}}")
+alertcondition(inLon and not inLon[1], "London killzone start", "ICT: London killzone started on {{ticker}}")
+alertcondition(inNyam and not inNyam[1], "NY AM killzone start", "ICT: New York AM killzone started on {{ticker}}")
+alertcondition(inNypm and not inNypm[1], "NY PM killzone start", "ICT: New York PM killzone started on {{ticker}}")

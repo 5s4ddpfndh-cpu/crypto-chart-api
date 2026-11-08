@@ -1,0 +1,59 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ICT Opens: midnight open (true day open), 08:30 open, daily, weekly and monthly opens
+//@version=5
+indicator("ICT Opens (Midnight / 08:30 / Daily / Weekly / Monthly)", "ICT Opens", overlay = true, max_lines_count = 200, max_labels_count = 200)
+
+keepN   = input.int(3, "Lines to keep for each open", minval = 1, maxval = 30)
+midOn   = input.bool(true, "", inline = "mid")
+midCol  = input.color(#FF9800, "Midnight open 00:00 NY (true day open)", inline = "mid")
+o830On  = input.bool(true, "", inline = "o830")
+o830Col = input.color(#00BCD4, "08:30 NY open", inline = "o830")
+dOn     = input.bool(false, "", inline = "d")
+dCol    = input.color(#787B86, "Daily open (exchange)", inline = "d")
+wOn     = input.bool(true, "", inline = "w")
+wCol    = input.color(#2962FF, "Weekly open", inline = "w")
+mOn     = input.bool(false, "", inline = "m")
+mCol    = input.color(#9C27B0, "Monthly open", inline = "m")
+
+TZ     = "America/New_York"
+TRANSP = color.new(color.white, 100)
+tfSec  = timeframe.in_seconds()
+
+nyDay    = dayofmonth(time, TZ)
+nyMins   = hour(time, TZ) * 60 + minute(time, TZ)
+newNYDay = nyDay != nyDay[1]
+is830    = nyMins >= 510 and (nyMins[1] < 510 or newNYDay)
+newD     = timeframe.change("D")
+newW     = timeframe.change("W")
+newM     = timeframe.change("M")
+
+var float midOpen = na
+if newNYDay
+    midOpen := open
+
+// Each open draws a line from its candle that runs until the next one starts
+openLine(isNew, price, txt, c) =>
+    var line  ln  = na
+    var label lb  = na
+    var array<line>  lns = array.new<line>()
+    var array<label> lbs = array.new<label>()
+    if isNew
+        ln := line.new(bar_index, price, bar_index + 1, price, color = c, style = line.style_dashed)
+        lb := label.new(bar_index + 1, price, txt, color = TRANSP, textcolor = c, style = label.style_label_left, size = size.small)
+        array.push(lns, ln)
+        array.push(lbs, lb)
+        if array.size(lns) > keepN
+            line.delete(array.shift(lns))
+            label.delete(array.shift(lbs))
+    else if not na(ln)
+        line.set_x2(ln, bar_index + 1)
+        label.set_x(lb, bar_index + 1)
+    true
+
+openLine(midOn and tfSec <= 3600 and newNYDay, open, "Midnight Open", midCol)
+openLine(o830On and tfSec <= 1800 and is830, open, "08:30 Open", o830Col)
+openLine(dOn and tfSec < 86400 and newD, open, "Daily Open", dCol)
+openLine(wOn and tfSec < 604800 and newW, open, "Weekly Open", wCol)
+openLine(mOn and tfSec < timeframe.in_seconds("1M") and newM, open, "Monthly Open", mCol)
+
+alertcondition(ta.cross(close, midOpen), "Price crossed midnight open", "ICT: price crossed the midnight open on {{ticker}}")

@@ -146,6 +146,12 @@ type Liq
     float price
     bool  eq
 
+type Rec
+    float top
+    float bot
+    int   left
+    bool  bull
+
 TZ     = "America/New_York"
 TRANSP = color.new(color.white, 100)
 atr    = ta.atr(14)
@@ -161,6 +167,7 @@ var array<box>   bullBB    = array.new<box>()
 var array<box>   bearBB    = array.new<box>()
 var array<Zone>  fvgs      = array.new<Zone>()
 var array<Zone>  bprs      = array.new<Zone>()
+var array<Rec>   fvgHist   = array.new<Rec>()
 var array<Zone>  viZones   = array.new<Zone>()
 var array<Zone>  nwogs     = array.new<Zone>()
 var array<Zone>  ndogs     = array.new<Zone>()
@@ -415,16 +422,21 @@ if array.size(viZones) > 0
         else
             extendZone(z)
 
+// BPR compares a new FVG with recent opposite FVGs, filled or not (the older gap is always traded through first)
 makeBPR(float top, float bot, bool isBull) =>
-    if array.size(fvgs) > 0
-        for j = 0 to array.size(fvgs) - 1
-            o = array.get(fvgs, j)
-            if not o.inv and o.bull != isBull
-                t = math.min(top, box.get_top(o.bx))
-                b = math.max(bot, box.get_bottom(o.bx))
+    if array.size(fvgHist) > 0
+        for j = array.size(fvgHist) - 1 to 0
+            r = array.get(fvgHist, j)
+            if r.bull != isBull
+                t = math.min(top, r.top)
+                b = math.max(bot, r.bot)
                 if t > b
-                    bx = box.new(box.get_left(o.bx), t, zoneX, b, border_color = color.new(bprCol, 40), bgcolor = bprCol, text = "BPR", text_color = color.new(bprCol, 0), text_size = size.tiny, text_halign = text.align_right)
+                    bx = box.new(r.left, t, zoneX, b, border_color = color.new(bprCol, 40), bgcolor = bprCol, text = "BPR", text_color = color.new(bprCol, 0), text_size = size.tiny, text_halign = text.align_right)
                     pushZone(bprs, Zone.new(bx, na, isBull, false), fvgMax)
+                    array.remove(fvgHist, j)
+    array.push(fvgHist, Rec.new(top, bot, bar_index - 2, isBull))
+    if array.size(fvgHist) > 20
+        array.shift(fvgHist)
     true
 
 newFVG(float top, float bot, bool isBull) =>
@@ -436,16 +448,18 @@ newFVG(float top, float bot, bool isBull) =>
 
 bullFVG  = low > high[2] and low - high[2] >= atr * fvgMinAtr
 bearFVG  = high < low[2] and low[2] - high >= atr * fvgMinAtr
-trackFVG = fvgShow or ifvgShow or bprShow
+trackFVG = fvgShow or ifvgShow
 
-if trackFVG and bullFVG
+if bullFVG
     if bprShow
         makeBPR(low, high[2], true)
-    newFVG(low, high[2], true)
-if trackFVG and bearFVG
+    if trackFVG
+        newFVG(low, high[2], true)
+if bearFVG
     if bprShow
         makeBPR(low[2], high, false)
-    newFVG(low[2], high, false)
+    if trackFVG
+        newFVG(low[2], high, false)
 
 viBull = close > open and close[1] > open[1] and open > close[1] and low <= high[1]
 viBear = close < open and close[1] < open[1] and open < close[1] and high >= low[1]
